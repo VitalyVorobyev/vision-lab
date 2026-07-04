@@ -1,0 +1,6 @@
+/target/
+**/target/
+**/node_modules/
+**/dist/
+recordings/
+.DS_Store

@@ -1,0 +1,683 @@
+//! Vision processing component runtime.
+
+use async_trait::async_trait;
+use comm_core::{
+    ApiError, CommandReceipt, ComponentIdentity, OperationId, Versioned, event, versioned,
+};
+use comm_local::{
+    CommandClient, CommandInbox, EventBus, MonotonicCounter, StateCell, command_channel,
+};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tokio::sync::watch;
+use vision_contracts::{
+    AlgorithmId, CameraApi, Detection, Frame, PointF32, RectF32, VisionApi, VisionCommand,
+    VisionCommandKind, VisionEvent, VisionEventStream, VisionLifecycle, VisionState,
+};
+
+#[derive(Clone)]
+pub struct VisionComponent {
+    client: CommandClient<VisionCommand, CommandReceipt>,
+    state: Arc<StateCell<Versioned<VisionState>>>,
+    events: Arc<EventBus<VisionEvent>>,
+}
+
+impl VisionComponent {
+    pub async fn spawn(
+        component_name: &str,
+        camera: Arc<dyn CameraApi>,
+    ) -> Result<Arc<Self>, ApiError> {
+        let identity = ComponentIdentity::new("vision", component_name, env!("CARGO_PKG_VERSION"));
+        let initial = versioned(identity.clone(), 0, VisionState::default());
+        let state = Arc::new(StateCell::new(initial));
+        let events = Arc::new(EventBus::new(512));
+        let (client, inbox) = command_channel(32);
+        let frames = camera.subscribe_frames().await?;
+        let component = Arc::new(Self {
+            client,
+            state: state.clone(),
+            events: events.clone(),
+        });
+        tokio::spawn(run_vision(identity, inbox, state, events, frames));
+        Ok(component)
+    }
+}
+
+#[async_trait]
+impl VisionApi for VisionComponent {
+    async fn submit(&self, command: VisionCommand) -> Result<CommandReceipt, ApiError> {
+        self.client.submit(command).await
+    }
+
+    async fn get_state(&self) -> Result<Versioned<VisionState>, ApiError> {
+        Ok(self.state.get().await)
+    }
+
+    async fn subscribe(&self) -> Result<VisionEventStream, ApiError> {
+        Ok(self.events.subscribe())
+    }
+}
+
+struct Runtime {
+    identity: ComponentIdentity,
+    state_cell: Arc<StateCell<Versioned<VisionState>>>,
+    events: Arc<EventBus<VisionEvent>>,
+    sequence: MonotonicCounter,
+    revision: MonotonicCounter,
+    state: VisionState,
+    latest_frame: Option<Arc<Frame>>,
+    detector: Option<ActiveDetector>,
+    processed_frames: u64,
+    last_processed_frame_id: u64,
+    started_at: Instant,
+}
+
+async fn run_vision(
+    identity: ComponentIdentity,
+    mut inbox: CommandInbox<VisionCommand, CommandReceipt>,
+    state_cell: Arc<StateCell<Versioned<VisionState>>>,
+    events: Arc<EventBus<VisionEvent>>,
+    mut frames: watch::Receiver<Option<Arc<Frame>>>,
+) {
+    let mut runtime = Runtime {
+        identity,
+        state_cell,
+        events,
+        sequence: MonotonicCounter::default(),
+        revision: MonotonicCounter::default(),
+        state: VisionState::default(),
+        latest_frame: None,
+        detector: None,
+        processed_frames: 0,
+        last_processed_frame_id: 0,
+        started_at: Instant::now(),
+    };
+
+    loop {
+        tokio::select! {
+            changed = frames.changed() => {
+                if changed.is_err() {
+                    runtime.set_error("camera frame stream closed").await;
+                    break;
+                }
+                let frame = frames.borrow().clone();
+                runtime.latest_frame = frame;
+                runtime.process_latest_frame().await;
+            }
+            Some(request) = inbox.recv() => {
+                let result = runtime.handle_command(&request.command).await;
+                let _ = request.respond_to.send(result);
+            }
+            else => break,
+        }
+    }
+}
+
+impl Runtime {
+    async fn handle_command(
+        &mut self,
+        command: &VisionCommand,
+    ) -> Result<CommandReceipt, ApiError> {
+        match &command.kind {
+            VisionCommandKind::SelectAlgorithm { algorithm } => {
+                self.state.selected_algorithm = *algorithm;
+                self.detector = None;
+                self.state.has_template = false;
+                self.state.lifecycle = if *algorithm == AlgorithmId::TemplateNcc {
+                    VisionLifecycle::WaitingForTemplate
+                } else {
+                    VisionLifecycle::Idle
+                };
+                self.publish(
+                    command.correlation_id,
+                    VisionEvent::AlgorithmSelected {
+                        algorithm: *algorithm,
+                    },
+                );
+            }
+            VisionCommandKind::SetRoi { roi } => {
+                self.state.roi = *roi;
+                self.detector = None;
+                self.state.has_template = false;
+                self.state.lifecycle = VisionLifecycle::WaitingForTemplate;
+                self.publish(
+                    command.correlation_id,
+                    VisionEvent::RoiChanged { roi: *roi },
+                );
+            }
+            VisionCommandKind::CaptureTemplate => {
+                if self.state.selected_algorithm != AlgorithmId::TemplateNcc {
+                    return Err(ApiError::Rejected(
+                        "template capture is only implemented for TemplateNcc in v1".into(),
+                    ));
+                }
+                let frame = self
+                    .latest_frame
+                    .as_ref()
+                    .ok_or_else(|| ApiError::Rejected("no camera frame available".into()))?;
+                let roi = self.state.roi.ok_or_else(|| {
+                    ApiError::Rejected("set an ROI before capturing a template".into())
+                })?;
+                let detector = TemplateNcc::capture(frame, roi)?;
+                let width = detector.width;
+                let height = detector.height;
+                self.detector = Some(ActiveDetector::TemplateNcc(detector));
+                self.state.has_template = true;
+                self.state.lifecycle = VisionLifecycle::Idle;
+                self.state.error = None;
+                self.publish(
+                    command.correlation_id,
+                    VisionEvent::TemplateCaptured { width, height },
+                );
+            }
+            VisionCommandKind::StartProcessing => {
+                if self.state.selected_algorithm == AlgorithmId::TemplateNcc
+                    && !matches!(self.detector, Some(ActiveDetector::TemplateNcc(_)))
+                {
+                    self.state.lifecycle = VisionLifecycle::WaitingForTemplate;
+                    self.store().await;
+                    return Err(ApiError::Rejected(
+                        "capture a template before starting processing".into(),
+                    ));
+                }
+                if self.detector.is_none() {
+                    self.detector = Some(ActiveDetector::for_algorithm(
+                        self.state.selected_algorithm,
+                        self.latest_frame.as_deref(),
+                    )?);
+                }
+                self.state.lifecycle = VisionLifecycle::Processing;
+                self.state.error = None;
+                self.started_at = Instant::now();
+                self.processed_frames = 0;
+                self.publish(
+                    command.correlation_id,
+                    VisionEvent::LifecycleChanged {
+                        lifecycle: self.state.lifecycle,
+                    },
+                );
+            }
+            VisionCommandKind::StopProcessing => {
+                self.state.lifecycle = VisionLifecycle::Idle;
+                self.publish(
+                    command.correlation_id,
+                    VisionEvent::LifecycleChanged {
+                        lifecycle: self.state.lifecycle,
+                    },
+                );
+            }
+        }
+
+        let accepted_revision = self.store().await;
+        Ok(CommandReceipt {
+            command_id: command.command_id,
+            operation_id: Some(OperationId::new()),
+            accepted_revision,
+        })
+    }
+
+    async fn process_latest_frame(&mut self) {
+        if self.state.lifecycle != VisionLifecycle::Processing {
+            return;
+        }
+        let Some(frame) = self.latest_frame.clone() else {
+            return;
+        };
+        if frame.meta.frame_id == self.last_processed_frame_id {
+            return;
+        }
+        if frame.meta.frame_id > self.last_processed_frame_id + 1
+            && self.last_processed_frame_id != 0
+        {
+            self.state.dropped_input_frames +=
+                frame.meta.frame_id - self.last_processed_frame_id - 1;
+        }
+        self.last_processed_frame_id = frame.meta.frame_id;
+
+        let Some(detector) = self.detector.as_mut() else {
+            self.state.lifecycle = VisionLifecycle::WaitingForTemplate;
+            self.store().await;
+            return;
+        };
+        let started = Instant::now();
+        match detector.detect(&frame) {
+            Ok(Some(mut detection)) => {
+                detection.latency_us = started.elapsed().as_micros() as u64;
+                self.processed_frames = self.processed_frames.saturating_add(1);
+                self.state.processing_fps = rate(self.processed_frames, self.started_at.elapsed());
+                self.state.input_fps = self.state.processing_fps;
+                let latency_ms = detection.latency_us as f32 / 1000.0;
+                self.state.mean_latency_ms = if self.processed_frames == 1 {
+                    latency_ms
+                } else {
+                    self.state.mean_latency_ms * 0.9 + latency_ms * 0.1
+                };
+                self.state.last_detection = Some(detection.clone());
+                self.publish(None, VisionEvent::DetectionProduced { detection });
+                self.store().await;
+            }
+            Ok(None) => {
+                self.processed_frames = self.processed_frames.saturating_add(1);
+                self.state.processing_fps = rate(self.processed_frames, self.started_at.elapsed());
+                self.store().await;
+            }
+            Err(error) => {
+                self.set_error(&error).await;
+            }
+        }
+    }
+
+    async fn set_error(&mut self, message: &str) {
+        self.state.lifecycle = VisionLifecycle::Error;
+        self.state.error = Some(message.to_string());
+        self.publish(
+            None,
+            VisionEvent::Error {
+                message: message.to_string(),
+            },
+        );
+        self.store().await;
+    }
+
+    fn publish(&self, correlation_id: Option<comm_core::CorrelationId>, payload: VisionEvent) {
+        self.events.publish(event(
+            self.identity.clone(),
+            self.sequence.advance(),
+            correlation_id,
+            payload,
+        ));
+    }
+
+    async fn store(&mut self) -> u64 {
+        let next_revision = self.revision.advance();
+        self.state_cell
+            .set(versioned(
+                self.identity.clone(),
+                next_revision,
+                self.state.clone(),
+            ))
+            .await;
+        next_revision
+    }
+}
+
+fn rate(count: u64, elapsed: Duration) -> f32 {
+    let secs = elapsed.as_secs_f32();
+    if secs > 0.0 { count as f32 / secs } else { 0.0 }
+}
+
+enum ActiveDetector {
+    TemplateNcc(TemplateNcc),
+    RadialSymmetry,
+    ChessCorners(Box<chess_corners::Detector>),
+    CalibrationTarget,
+}
+
+impl ActiveDetector {
+    fn for_algorithm(
+        algorithm: AlgorithmId,
+        latest_frame: Option<&Frame>,
+    ) -> Result<Self, ApiError> {
+        match algorithm {
+            AlgorithmId::TemplateNcc => Err(ApiError::Rejected(
+                "capture a template before starting TemplateNcc".into(),
+            )),
+            AlgorithmId::RadialSymmetry => Ok(Self::RadialSymmetry),
+            AlgorithmId::ChessCorners => {
+                let detector = chess_corners::Detector::new(chess_corners::DetectorConfig::chess())
+                    .map_err(|error| ApiError::Failed(error.to_string()))?;
+                Ok(Self::ChessCorners(Box::new(detector)))
+            }
+            AlgorithmId::CalibrationTarget => Ok(Self::CalibrationTarget),
+            AlgorithmId::RingGridTarget => Err(ApiError::Rejected(
+                "ringgrid is wired as a published dependency but needs target layout configuration before it can run".into(),
+            )),
+            AlgorithmId::EdgeModelMatch => Err(ApiError::Rejected(
+                "EdgeModelMatch is deferred until vision-metrology is published".into(),
+            )),
+        }
+        .and_then(|detector| {
+            latest_frame
+                .map(|_| detector)
+                .ok_or_else(|| ApiError::Rejected("no camera frame available".into()))
+        })
+    }
+
+    fn detect(&mut self, frame: &Frame) -> Result<Option<Detection>, String> {
+        match self {
+            Self::TemplateNcc(detector) => detector.detect(frame),
+            Self::RadialSymmetry => detect_radial_symmetry(frame),
+            Self::ChessCorners(detector) => detect_chess_corners(detector.as_mut(), frame),
+            Self::CalibrationTarget => detect_calibration_target(frame),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TemplateNcc {
+    width: u32,
+    height: u32,
+    data: Vec<u8>,
+    mean: f32,
+    norm: f32,
+}
+
+fn detect_radial_symmetry(frame: &Frame) -> Result<Option<Detection>, String> {
+    let view = radsym::ImageView::new(
+        &frame.bytes,
+        frame.meta.width as usize,
+        frame.meta.height as usize,
+        frame.meta.stride as usize,
+    )
+    .map_err(|error| error.to_string())?;
+    let base_radius = (frame.meta.width.min(frame.meta.height) / 18).clamp(4, 24);
+    let radii = [
+        base_radius.saturating_sub(2).max(2),
+        base_radius,
+        base_radius + 2,
+    ];
+    let config = radsym::DetectCirclesConfig::for_radii(radii)
+        .polarity(radsym::Polarity::Both)
+        .radius_hint(base_radius as f32)
+        .min_score(0.2);
+    let detections = radsym::detect_circles(&view, &config).map_err(|error| error.to_string())?;
+    let Some(best) = detections.first() else {
+        return Ok(None);
+    };
+    let circle = best.hypothesis;
+    let radius = circle.radius.max(1.0);
+    Ok(Some(Detection {
+        frame_id: frame.meta.frame_id,
+        timestamp: frame.meta.timestamp,
+        object_id: "radial-symmetry-circle".into(),
+        confidence: best.score.total.clamp(0.0, 1.0),
+        bbox: Some(RectF32 {
+            x: circle.center.x - radius,
+            y: circle.center.y - radius,
+            width: radius * 2.0,
+            height: radius * 2.0,
+        }),
+        points: vec![PointF32 {
+            x: circle.center.x,
+            y: circle.center.y,
+        }],
+        method: AlgorithmId::RadialSymmetry,
+        latency_us: 0,
+        diagnostics: Some(format!("radius={:.2}", circle.radius)),
+    }))
+}
+
+fn detect_chess_corners(
+    detector: &mut chess_corners::Detector,
+    frame: &Frame,
+) -> Result<Option<Detection>, String> {
+    let corners = detector
+        .detect_u8(&frame.bytes, frame.meta.width, frame.meta.height)
+        .map_err(|error| error.to_string())?;
+    if corners.is_empty() {
+        return Ok(None);
+    }
+    let points: Vec<PointF32> = corners
+        .iter()
+        .map(|corner| PointF32 {
+            x: corner.x,
+            y: corner.y,
+        })
+        .collect();
+    let bbox = bbox_from_points(&points);
+    let max_response = corners
+        .iter()
+        .map(|corner| corner.response)
+        .fold(0.0_f32, f32::max);
+    Ok(Some(Detection {
+        frame_id: frame.meta.frame_id,
+        timestamp: frame.meta.timestamp,
+        object_id: "chess-corners".into(),
+        confidence: response_confidence(max_response),
+        bbox,
+        points,
+        method: AlgorithmId::ChessCorners,
+        latency_us: 0,
+        diagnostics: Some(format!("corners={}", corners.len())),
+    }))
+}
+
+fn detect_calibration_target(frame: &Frame) -> Result<Option<Detection>, String> {
+    let chess_cfg = calib_targets::detect::default_chess_config();
+    let params = calib_targets::chessboard::DetectorParams::default();
+    let detection = calib_targets::detect::detect_chessboard_from_gray_u8(
+        frame.meta.width,
+        frame.meta.height,
+        &frame.bytes,
+        &chess_cfg,
+        &params,
+    )
+    .map_err(|error| error.to_string())?;
+    let Some(detection) = detection else {
+        return Ok(None);
+    };
+    let points: Vec<PointF32> = detection
+        .corners
+        .iter()
+        .map(|corner| PointF32 {
+            x: corner.position.x,
+            y: corner.position.y,
+        })
+        .collect();
+    Ok(Some(Detection {
+        frame_id: frame.meta.frame_id,
+        timestamp: frame.meta.timestamp,
+        object_id: "calibration-chessboard".into(),
+        confidence: (detection.corners.len() as f32 / 64.0).clamp(0.0, 1.0),
+        bbox: bbox_from_points(&points),
+        points,
+        method: AlgorithmId::CalibrationTarget,
+        latency_us: 0,
+        diagnostics: Some(format!(
+            "corners={} cell_size={:?}",
+            detection.corners.len(),
+            detection.cell_size
+        )),
+    }))
+}
+
+fn bbox_from_points(points: &[PointF32]) -> Option<RectF32> {
+    let first = points.first()?;
+    let (mut min_x, mut max_x) = (first.x, first.x);
+    let (mut min_y, mut max_y) = (first.y, first.y);
+    for point in points.iter().skip(1) {
+        min_x = min_x.min(point.x);
+        max_x = max_x.max(point.x);
+        min_y = min_y.min(point.y);
+        max_y = max_y.max(point.y);
+    }
+    Some(RectF32 {
+        x: min_x,
+        y: min_y,
+        width: (max_x - min_x).max(1.0),
+        height: (max_y - min_y).max(1.0),
+    })
+}
+
+fn response_confidence(response: f32) -> f32 {
+    if response <= 0.0 {
+        0.0
+    } else {
+        (response / (response + 1000.0)).clamp(0.0, 1.0)
+    }
+}
+
+impl TemplateNcc {
+    fn capture(frame: &Frame, roi: RectF32) -> Result<Self, ApiError> {
+        let roi = roi
+            .clamp_to_image(frame.meta.width, frame.meta.height)
+            .ok_or_else(|| ApiError::InvalidRequest("ROI is outside the frame".into()))?;
+        let x0 = roi.x.round() as u32;
+        let y0 = roi.y.round() as u32;
+        let width = roi.width.round() as u32;
+        let height = roi.height.round() as u32;
+        let mut data = Vec::with_capacity((width * height) as usize);
+        for y in y0..(y0 + height) {
+            let row = &frame.bytes[(y * frame.meta.stride + x0) as usize
+                ..(y * frame.meta.stride + x0 + width) as usize];
+            data.extend_from_slice(row);
+        }
+        let mean = mean_u8(&data);
+        let norm = norm_centered(&data, mean);
+        if norm <= f32::EPSILON {
+            return Err(ApiError::Rejected(
+                "template has no contrast; choose a textured ROI".into(),
+            ));
+        }
+        Ok(Self {
+            width,
+            height,
+            data,
+            mean,
+            norm,
+        })
+    }
+
+    fn detect(&mut self, frame: &Frame) -> Result<Option<Detection>, String> {
+        if frame.meta.width < self.width || frame.meta.height < self.height {
+            return Ok(None);
+        }
+        let search_w = frame.meta.width - self.width;
+        let search_h = frame.meta.height - self.height;
+        let mut best_score = -1.0_f32;
+        let mut best_x = 0_u32;
+        let mut best_y = 0_u32;
+
+        for y in 0..=search_h {
+            for x in 0..=search_w {
+                let score = self.score_at(frame, x, y);
+                if score > best_score {
+                    best_score = score;
+                    best_x = x;
+                    best_y = y;
+                }
+            }
+        }
+
+        (best_score >= 0.65)
+            .then_some(Detection {
+                frame_id: frame.meta.frame_id,
+                timestamp: frame.meta.timestamp,
+                object_id: "template".into(),
+                confidence: best_score.clamp(0.0, 1.0),
+                bbox: Some(RectF32 {
+                    x: best_x as f32,
+                    y: best_y as f32,
+                    width: self.width as f32,
+                    height: self.height as f32,
+                }),
+                points: Vec::new(),
+                method: AlgorithmId::TemplateNcc,
+                latency_us: 0,
+                diagnostics: None,
+            })
+            .pipe(Ok)
+    }
+
+    fn score_at(&self, frame: &Frame, x0: u32, y0: u32) -> f32 {
+        let mut sum = 0.0_f32;
+        for y in 0..self.height {
+            let base = ((y0 + y) * frame.meta.stride + x0) as usize;
+            for x in 0..self.width {
+                sum += frame.bytes[base + x as usize] as f32;
+            }
+        }
+        let count = (self.width * self.height) as f32;
+        let mean = sum / count;
+        let mut numerator = 0.0_f32;
+        let mut patch_norm = 0.0_f32;
+        let mut i = 0_usize;
+        for y in 0..self.height {
+            let base = ((y0 + y) * frame.meta.stride + x0) as usize;
+            for x in 0..self.width {
+                let a = self.data[i] as f32 - self.mean;
+                let b = frame.bytes[base + x as usize] as f32 - mean;
+                numerator += a * b;
+                patch_norm += b * b;
+                i += 1;
+            }
+        }
+        if patch_norm <= f32::EPSILON {
+            return -1.0;
+        }
+        numerator / (self.norm * patch_norm.sqrt())
+    }
+}
+
+fn mean_u8(data: &[u8]) -> f32 {
+    data.iter().map(|value| *value as f32).sum::<f32>() / data.len() as f32
+}
+
+fn norm_centered(data: &[u8], mean: f32) -> f32 {
+    data.iter()
+        .map(|value| {
+            let centered = *value as f32 - mean;
+            centered * centered
+        })
+        .sum::<f32>()
+        .sqrt()
+}
+
+trait Pipe: Sized {
+    fn pipe<T>(self, f: impl FnOnce(Self) -> T) -> T {
+        f(self)
+    }
+}
+
+impl<T> Pipe for T {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use comm_core::now;
+    use vision_contracts::{FrameMeta, PixelFormat};
+
+    #[test]
+    fn ncc_finds_known_synthetic_target() {
+        let template_frame = frame_with_square(1, 80, 60, 25, 25);
+        let roi = RectF32 {
+            x: 80.0,
+            y: 60.0,
+            width: 25.0,
+            height: 25.0,
+        };
+        let mut detector = TemplateNcc::capture(&template_frame, roi).unwrap();
+        let search_frame = frame_with_square(2, 117, 91, 25, 25);
+        let detection = detector.detect(&search_frame).unwrap().unwrap();
+        let bbox = detection.bbox.unwrap();
+        assert!((bbox.x - 117.0).abs() <= 1.0);
+        assert!((bbox.y - 91.0).abs() <= 1.0);
+        assert!(detection.confidence > 0.9);
+    }
+
+    fn frame_with_square(frame_id: u64, x0: u32, y0: u32, w: u32, h: u32) -> Frame {
+        let width = 180;
+        let height = 140;
+        let mut bytes = vec![20_u8; width * height];
+        for y in y0..(y0 + h) {
+            for x in x0..(x0 + w) {
+                let value = if (x + y) % 2 == 0 { 240 } else { 180 };
+                bytes[(y * width as u32 + x) as usize] = value;
+            }
+        }
+        Frame {
+            meta: FrameMeta {
+                frame_id,
+                timestamp: now(),
+                width: width as u32,
+                height: height as u32,
+                stride: width as u32,
+                pixel_format: PixelFormat::Gray8,
+            },
+            bytes: Bytes::from(bytes),
+        }
+    }
+}

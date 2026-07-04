@@ -1,0 +1,25 @@
+[package]
+name = "vision-processing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = ["published-adapters"]
+published-adapters = ["dep:calib-targets", "dep:chess-corners", "dep:radsym", "dep:ringgrid"]
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+calib-targets = { workspace = true, optional = true }
+chess-corners = { workspace = true, optional = true }
+comm-core.workspace = true
+comm-local.workspace = true
+radsym = { workspace = true, optional = true }
+ringgrid = { workspace = true, optional = true }
+tokio.workspace = true
+vision-contracts.workspace = true
+
+[lints]
+workspace = true

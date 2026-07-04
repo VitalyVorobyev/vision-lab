@@ -1,0 +1,21 @@
+[package]
+name = "system-mirror"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+comm-core.workspace = true
+serde.workspace = true
+tokio.workspace = true
+vision-contracts.workspace = true
+
+[dev-dependencies]
+camera-mac.workspace = true
+recorder.workspace = true
+tempfile.workspace = true
+vision-processing.workspace = true
+
+[lints]
+workspace = true

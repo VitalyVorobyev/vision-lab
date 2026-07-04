@@ -1,0 +1,48 @@
+[advisories]
+version = 2
+ignore = [
+  { id = "RUSTSEC-2024-0370", reason = "Unmaintained proc-macro-error is transitive through latest Tauri/Linux GTK stack; no safe direct upgrade is available." },
+  { id = "RUSTSEC-2024-0411", reason = "Unmaintained GTK3 binding is transitive through latest Tauri Linux backend; project target is macOS-first." },
+  { id = "RUSTSEC-2024-0412", reason = "Unmaintained GTK3 binding is transitive through latest Tauri Linux backend; project target is macOS-first." },
+  { id = "RUSTSEC-2024-0413", reason = "Unmaintained GTK3 binding is transitive through latest Tauri Linux backend; project target is macOS-first." },
+  { id = "RUSTSEC-2024-0414", reason = "Unmaintained GTK3 binding is transitive through latest Tauri Linux backend; project target is macOS-first." },
+  { id = "RUSTSEC-2024-0415", reason = "Unmaintained GTK3 binding is transitive through latest Tauri Linux backend; project target is macOS-first." },
+  { id = "RUSTSEC-2024-0416", reason = "Unmaintained GTK3 binding is transitive through latest Tauri Linux backend; project target is macOS-first." },
+  { id = "RUSTSEC-2024-0417", reason = "Unmaintained GTK3 binding is transitive through latest Tauri Linux backend; project target is macOS-first." },
+  { id = "RUSTSEC-2024-0418", reason = "Unmaintained GTK3 binding is transitive through latest Tauri Linux backend; project target is macOS-first." },
+  { id = "RUSTSEC-2024-0419", reason = "Unmaintained GTK3 binding is transitive through latest Tauri Linux backend; project target is macOS-first." },
+  { id = "RUSTSEC-2024-0420", reason = "Unmaintained GTK3 binding is transitive through latest Tauri Linux backend; project target is macOS-first." },
+  { id = "RUSTSEC-2024-0436", reason = "Unmaintained paste is transitive through latest image/nalgebra paths; no safe direct upgrade is available." },
+  { id = "RUSTSEC-2025-0075", reason = "Unmaintained unic dependency is transitive through latest Tauri urlpattern path; no safe direct upgrade is available." },
+  { id = "RUSTSEC-2025-0080", reason = "Unmaintained unic dependency is transitive through latest Tauri urlpattern path; no safe direct upgrade is available." },
+  { id = "RUSTSEC-2025-0081", reason = "Unmaintained unic dependency is transitive through latest Tauri urlpattern path; no safe direct upgrade is available." },
+  { id = "RUSTSEC-2025-0098", reason = "Unmaintained unic dependency is transitive through latest Tauri urlpattern path; no safe direct upgrade is available." },
+  { id = "RUSTSEC-2025-0100", reason = "Unmaintained unic dependency is transitive through latest Tauri urlpattern path; no safe direct upgrade is available." },
+]
+
+[licenses]
+version = 2
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "MIT",
+  "MPL-2.0",
+  "NCSA",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "allow"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -1,0 +1,20 @@
+[package]
+name = "vision-contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+dev-faults = []
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+comm-core.workspace = true
+serde.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

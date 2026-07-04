@@ -1,0 +1,22 @@
+[package]
+name = "camera-mac"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = ["camera-sim"]
+camera-sim = []
+real-camera = []
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+comm-core.workspace = true
+comm-local.workspace = true
+tokio.workspace = true
+vision-contracts.workspace = true
+
+[lints]
+workspace = true

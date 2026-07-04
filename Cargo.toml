@@ -1,0 +1,54 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/comm-core",
+    "crates/comm-local",
+    "crates/vision-contracts",
+    "crates/camera-mac",
+    "crates/vision-processing",
+    "crates/recorder",
+    "crates/system-mirror",
+    "apps/operator-ui/src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+bytes = { version = "1", features = ["serde"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+futures = "0.3"
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["serde", "v4"] }
+
+comm-core = { path = "crates/comm-core" }
+comm-local = { path = "crates/comm-local" }
+vision-contracts = { path = "crates/vision-contracts" }
+camera-mac = { path = "crates/camera-mac" }
+vision-processing = { path = "crates/vision-processing" }
+recorder = { path = "crates/recorder" }
+system-mirror = { path = "crates/system-mirror" }
+
+calib-targets = { version = "0.10.1", default-features = false, features = ["image"] }
+chess-corners = { version = "1.0.0", default-features = false, features = ["image"] }
+radsym = { version = "0.4.0", default-features = false }
+ringgrid = { version = "0.8.0", default-features = false }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"

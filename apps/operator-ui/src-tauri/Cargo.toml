@@ -1,0 +1,34 @@
+[package]
+name = "operator-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "operator_ui_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "operator-ui"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+base64.workspace = true
+camera-mac.workspace = true
+comm-core.workspace = true
+recorder.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+system-mirror.workspace = true
+tauri = { version = "2.11.5", features = [] }
+tauri-plugin-opener = "2.5.4"
+tokio.workspace = true
+vision-contracts.workspace = true
+vision-processing.workspace = true
+
+[lints]
+workspace = true
