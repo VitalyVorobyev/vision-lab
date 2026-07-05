@@ -43,6 +43,27 @@ async fn connect_camera(runtime: State<'_, AppRuntime>) -> Result<CommandReceipt
 }
 
 #[tauri::command]
+async fn refresh_camera_devices(runtime: State<'_, AppRuntime>) -> Result<CommandReceipt, String> {
+    submit_camera(&runtime, CameraCommandKind::RefreshDevices).await
+}
+
+#[tauri::command]
+async fn select_camera_device(
+    runtime: State<'_, AppRuntime>,
+    device_id: String,
+) -> Result<CommandReceipt, String> {
+    submit_camera(&runtime, CameraCommandKind::SelectDevice { device_id }).await
+}
+
+#[tauri::command]
+async fn select_camera_format(
+    runtime: State<'_, AppRuntime>,
+    format_id: String,
+) -> Result<CommandReceipt, String> {
+    submit_camera(&runtime, CameraCommandKind::SelectFormat { format_id }).await
+}
+
+#[tauri::command]
 async fn start_camera(runtime: State<'_, AppRuntime>) -> Result<CommandReceipt, String> {
     submit_camera(&runtime, CameraCommandKind::StartStream).await
 }
@@ -147,7 +168,7 @@ pub fn run() {
         .setup(|app| {
             let app_handle = app.handle().clone();
             let runtime = tauri::async_runtime::block_on(async {
-                let camera = CameraComponent::spawn_simulated("macbook-camera-sim");
+                let camera = CameraComponent::spawn_macos("macos-camera");
                 let camera_api: Arc<dyn CameraApi> = camera;
                 let vision = VisionComponent::spawn("main", camera_api.clone()).await?;
                 let vision_api: Arc<dyn VisionApi> = vision;
@@ -189,6 +210,9 @@ pub fn run() {
             system_view,
             latest_frame,
             connect_camera,
+            refresh_camera_devices,
+            select_camera_device,
+            select_camera_format,
             start_camera,
             stop_camera,
             set_requested_fps,

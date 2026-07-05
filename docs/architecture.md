@@ -8,7 +8,8 @@ the communication contract between independently owned components.
 
 The host wires these components together:
 
-- `camera-mac` owns frame acquisition and camera lifecycle.
+- `camera-mac` owns frame acquisition, camera lifecycle, device discovery,
+  permission state, and active camera configuration.
 - `vision-processing` owns detector selection, ROI/template state, processing,
   and detections.
 - `recorder` owns session capture and all recording counters.
@@ -69,16 +70,29 @@ The Tauri backend emits the latest frame to React on a dedicated `frame` event.
 `SystemView` carries only metadata, state, counters, recent event summaries, ROI,
 and detection overlays.
 
+The desktop app uses the native macOS AVFoundation backend by default. The
+camera state exposes permission status, available devices, formats, and the
+active selection through normalized `vision-contracts` types. The simulator
+remains the deterministic CI and test backend.
+
+Continuity Camera support is intentionally scoped to devices macOS exposes
+through AVFoundation. Vision Lab does not implement a custom iPhone/iPad
+transport in v1.
+
 ## Algorithm Integration
 
 `vision-processing` exposes normalized `AlgorithmId` values. Concrete algorithm
 crate types stay internal to adapter implementations.
 
+The default online workflow is ChESS corner detection. The operator UI sequences
+the existing camera and vision commands, then observes state and detection
+events through `SystemView`.
+
 Implemented in v1:
 
+- `ChessCorners`: direct `chess-corners` corner detections from grayscale frames.
 - `TemplateNcc`: normalized cross-correlation template matching.
 - `RadialSymmetry`: direct `radsym` circle detections from grayscale frames.
-- `ChessCorners`: direct `chess-corners` corner detections from grayscale frames.
 - `CalibrationTarget`: `calib-targets` chessboard detection with default params.
 
 Selectable extension points:
@@ -113,6 +127,11 @@ Required checks:
 ```sh
 ./scripts/quality.sh
 ```
+
+The quality gate runs in CI on macOS and includes Rust formatting, Clippy,
+tests, audit/deny checks, frontend lint/typecheck/build, and Bun audit. Rust
+`allow` attributes are forbidden. Clippy denies long functions with an 80-line
+threshold.
 
 Run the desktop prototype with:
 

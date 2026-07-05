@@ -21,6 +21,21 @@ export function connectCamera() {
   return invoke("connect_camera");
 }
 
+export function refreshCameraDevices() {
+  if (!isTauriHost()) return Promise.resolve();
+  return invoke("refresh_camera_devices");
+}
+
+export function selectCameraDevice(deviceId: string) {
+  if (!isTauriHost()) return Promise.resolve(deviceId);
+  return invoke("select_camera_device", { deviceId });
+}
+
+export function selectCameraFormat(formatId: string) {
+  if (!isTauriHost()) return Promise.resolve(formatId);
+  return invoke("select_camera_format", { formatId });
+}
+
 export function startCamera() {
   if (!isTauriHost()) return Promise.resolve();
   return invoke("start_camera");

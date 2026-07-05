@@ -1,4 +1,4 @@
-import { CircleDot, Pause, Radio, ScanLine } from "lucide-react";
+import { CircleDot, Pause, Radio, ScanLine, ScanSearch } from "lucide-react";
 
 import type { RectF32 } from "../../domain/geometry";
 import type { AlgorithmId, VisionState } from "../../domain/vision";
@@ -16,6 +16,7 @@ export function VisionControls({
   onSelectAlgorithm,
   onClearRoi,
   onCaptureTemplate,
+  onRunChess,
   onStartProcessing,
   onStopProcessing,
 }: {
@@ -25,18 +26,41 @@ export function VisionControls({
   onSelectAlgorithm: (algorithm: AlgorithmId) => void;
   onClearRoi: () => void;
   onCaptureTemplate: () => void;
+  onRunChess: () => void;
   onStartProcessing: () => void;
   onStopProcessing: () => void;
 }) {
   const hasRoi = pendingRoi !== null || vision?.roi != null;
+  const selectedAlgorithm = vision?.selected_algorithm ?? "ChessCorners";
+  const isTemplate = selectedAlgorithm === "TemplateNcc";
+  const detectorMetric = isTemplate
+    ? ({
+        label: "Template",
+        tone: vision?.has_template ? "good" : "warn",
+        value: vision?.has_template ? "Ready" : "Missing",
+      } as const)
+    : ({
+        label: "Detector",
+        tone: "good",
+        value: "Ready",
+      } as const);
 
   return (
     <Panel eyebrow="Detect" title="Vision">
       <div className="grid gap-3">
+        <Button
+          busy={pending("run-chess")}
+          className="w-full"
+          icon={<ScanSearch />}
+          onClick={onRunChess}
+          variant="primary"
+        >
+          Run ChESS
+        </Button>
         <Select
           label="Algorithm"
           onChange={(event) => onSelectAlgorithm(event.currentTarget.value as AlgorithmId)}
-          value={vision?.selected_algorithm ?? "TemplateNcc"}
+          value={selectedAlgorithm}
         >
           {algorithms.map((algorithm) => (
             <option key={algorithm} value={algorithm}>
@@ -50,7 +74,7 @@ export function VisionControls({
           </Button>
           <Button
             busy={pending("capture-template")}
-            disabled={!hasRoi}
+            disabled={!hasRoi || !isTemplate}
             icon={<CircleDot />}
             onClick={onCaptureTemplate}
           >
@@ -62,7 +86,6 @@ export function VisionControls({
             busy={pending("start-processing")}
             icon={<Radio />}
             onClick={onStartProcessing}
-            variant="primary"
           >
             Process
           </Button>
@@ -72,11 +95,7 @@ export function VisionControls({
         </Toolbar>
         <MetricGrid
           items={[
-            {
-              label: "Template",
-              tone: vision?.has_template ? "good" : "warn",
-              value: vision?.has_template ? "Ready" : "Missing",
-            },
+            detectorMetric,
             { label: "Processing", value: `${(vision?.processing_fps ?? 0).toFixed(1)} fps` },
             { label: "Latency", value: `${(vision?.mean_latency_ms ?? 0).toFixed(2)} ms` },
             {
@@ -86,7 +105,9 @@ export function VisionControls({
             },
           ]}
         />
-        {!hasRoi ? <p className="text-xs text-muted">Draw an ROI on the live frame to capture a template.</p> : null}
+        {isTemplate && !hasRoi ? (
+          <p className="text-xs text-muted">Draw an ROI on the live frame to capture a template.</p>
+        ) : null}
       </div>
     </Panel>
   );

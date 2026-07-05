@@ -53,7 +53,7 @@ export function CameraControls({
             { label: "Frame", value: String(camera?.frame_id ?? 0) },
             { label: "Size", value: `${camera?.frame_width ?? 0}x${camera?.frame_height ?? 0}` },
             {
-              label: "Dropped",
+              label: "Capture drops",
               tone: (camera?.dropped_frames ?? 0) > 0 ? "warn" : "neutral",
               value: String(camera?.dropped_frames ?? 0),
             },

@@ -32,6 +32,10 @@ export const emptySystemView: SystemView = {
     revision: 0,
     value: {
       lifecycle: "Offline",
+      available_devices: [],
+      active_device_id: null,
+      active_format_id: null,
+      permission_status: "Unknown",
       requested_fps: 30,
       actual_fps: 0,
       frame_width: 0,
@@ -45,7 +49,7 @@ export const emptySystemView: SystemView = {
     revision: 0,
     value: {
       lifecycle: "Offline",
-      selected_algorithm: "TemplateNcc",
+      selected_algorithm: "ChessCorners",
       roi: null,
       has_template: false,
       input_fps: 0,

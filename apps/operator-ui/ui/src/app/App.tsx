@@ -10,7 +10,10 @@ import { useSystemView } from "../hooks/useSystemView";
 import {
   captureTemplate,
   connectCamera,
+  refreshCameraDevices,
   selectAlgorithm,
+  selectCameraDevice,
+  selectCameraFormat,
   setRequestedFps,
   setRoi,
   startCamera,
@@ -41,12 +44,19 @@ export function App() {
 
   useFrameCanvas({
     canvasRef,
-    detection: vision?.last_detection?.bbox ?? null,
+    detection: vision?.last_detection ?? null,
     frame: latestFrame.frame,
     roi: activeRoi,
   });
 
   const error = commands.error ?? system.error ?? latestFrame.error;
+  const runChess = useCallback(async () => {
+    await refreshCameraDevices();
+    await connectCamera();
+    await startCamera();
+    await selectAlgorithm("ChessCorners");
+    await startProcessing();
+  }, []);
 
   return (
     <AppShell
@@ -62,8 +72,18 @@ export function App() {
         system.clearError();
         latestFrame.clearError();
       }}
+      onRunChess={() => void commands.execute("run-chess", runChess)}
+      onRefreshCameraDevices={() =>
+        void commands.execute("refresh-camera-devices", refreshCameraDevices)
+      }
       onSelectAlgorithm={(algorithm: AlgorithmId) =>
         void commands.execute("select-algorithm", () => selectAlgorithm(algorithm))
+      }
+      onSelectCameraDevice={(deviceId: string) =>
+        void commands.execute("select-camera-device", () => selectCameraDevice(deviceId))
+      }
+      onSelectCameraFormat={(formatId: string) =>
+        void commands.execute("select-camera-format", () => selectCameraFormat(formatId))
       }
       onSetRequestedFps={(fps: number) =>
         void commands.execute("set-requested-fps", () => setRequestedFps(fps))

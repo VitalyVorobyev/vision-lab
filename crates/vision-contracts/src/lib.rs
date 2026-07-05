@@ -97,9 +97,61 @@ pub enum CameraLifecycle {
     Error,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CameraFormatInfo {
+    pub id: String,
+    pub width: u32,
+    pub height: u32,
+    pub pixel_format: PixelFormat,
+    pub min_fps: f32,
+    pub max_fps: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CameraPermissionStatus {
+    Unknown,
+    NotDetermined,
+    Authorized,
+    Denied,
+    Restricted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CameraPosition {
+    Unknown,
+    Front,
+    Back,
+    External,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CameraTransport {
+    Unknown,
+    BuiltIn,
+    Continuity,
+    Usb,
+    Virtual,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CameraDeviceInfo {
+    pub id: String,
+    pub display_name: String,
+    pub model_id: Option<String>,
+    pub manufacturer: Option<String>,
+    pub position: CameraPosition,
+    pub transport: CameraTransport,
+    pub is_default: bool,
+    pub formats: Vec<CameraFormatInfo>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CameraState {
     pub lifecycle: CameraLifecycle,
+    pub available_devices: Vec<CameraDeviceInfo>,
+    pub active_device_id: Option<String>,
+    pub active_format_id: Option<String>,
+    pub permission_status: CameraPermissionStatus,
     pub requested_fps: f32,
     pub actual_fps: f32,
     pub frame_width: u32,
@@ -113,6 +165,10 @@ impl Default for CameraState {
     fn default() -> Self {
         Self {
             lifecycle: CameraLifecycle::Disconnected,
+            available_devices: Vec::new(),
+            active_device_id: None,
+            active_format_id: None,
+            permission_status: CameraPermissionStatus::Unknown,
             requested_fps: 30.0,
             actual_fps: 0.0,
             frame_width: 0,
@@ -143,7 +199,10 @@ impl CameraCommand {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CameraCommandKind {
+    RefreshDevices,
     Connect,
+    SelectDevice { device_id: String },
+    SelectFormat { format_id: String },
     StartStream,
     StopStream,
     SetRequestedFps { fps: f32 },
@@ -151,11 +210,28 @@ pub enum CameraCommandKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CameraEvent {
-    LifecycleChanged { lifecycle: CameraLifecycle },
-    RequestedFpsChanged { fps: f32 },
-    FrameProduced { frame_id: u64 },
-    DroppedFramesChanged { dropped_frames: u64 },
-    Error { message: String },
+    LifecycleChanged {
+        lifecycle: CameraLifecycle,
+    },
+    DevicesChanged {
+        count: usize,
+    },
+    ActiveConfigChanged {
+        device_id: Option<String>,
+        format_id: Option<String>,
+    },
+    RequestedFpsChanged {
+        fps: f32,
+    },
+    FrameProduced {
+        frame_id: u64,
+    },
+    DroppedFramesChanged {
+        dropped_frames: u64,
+    },
+    Error {
+        message: String,
+    },
 }
 
 pub type CameraEventStream = EventStream<CameraEvent>;
@@ -185,8 +261,8 @@ pub struct VisionState {
 impl Default for VisionState {
     fn default() -> Self {
         Self {
-            lifecycle: VisionLifecycle::WaitingForTemplate,
-            selected_algorithm: AlgorithmId::TemplateNcc,
+            lifecycle: VisionLifecycle::Idle,
+            selected_algorithm: AlgorithmId::ChessCorners,
             roi: None,
             has_template: false,
             input_fps: 0.0,

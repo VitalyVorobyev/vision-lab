@@ -1,4 +1,6 @@
-import type { PointerEventHandler, RefObject } from "react";
+import type { CSSProperties, PointerEventHandler, RefObject } from "react";
+
+import type { FramePayload } from "../../domain/camera";
 
 type CanvasHandlers = {
   onPointerDown: PointerEventHandler<HTMLCanvasElement>;
@@ -11,16 +13,23 @@ type CanvasHandlers = {
 export function FrameCanvas({
   canvasRef,
   handlers,
+  frame,
 }: {
   canvasRef: RefObject<HTMLCanvasElement | null>;
   handlers: CanvasHandlers;
+  frame: FramePayload | null;
 }) {
+  const style: CSSProperties = frame
+    ? { aspectRatio: `${frame.meta.width} / ${frame.meta.height}` }
+    : { aspectRatio: "4 / 3" };
+
   return (
     <canvas
       aria-label="Live camera frame with ROI and detection overlays"
-      className="h-full min-h-[360px] w-full cursor-crosshair bg-canvas object-contain [image-rendering:pixelated]"
+      className="block h-full max-h-full w-auto max-w-full cursor-crosshair bg-canvas [image-rendering:pixelated]"
       height={480}
       ref={canvasRef}
+      style={style}
       width={640}
       {...handlers}
     />

@@ -1,4 +1,5 @@
 import type { RectF32 } from "./geometry";
+import type { PointF32 } from "./geometry";
 
 export type AlgorithmId =
   | "TemplateNcc"
@@ -10,10 +11,13 @@ export type AlgorithmId =
 
 export type Detection = {
   frame_id: number;
+  object_id: string;
   confidence: number;
   bbox?: RectF32 | null;
+  points: PointF32[];
   method: AlgorithmId;
   latency_us: number;
+  diagnostics?: string | null;
 };
 
 export type VisionState = {
@@ -30,11 +34,11 @@ export type VisionState = {
 };
 
 export const algorithms: AlgorithmId[] = [
+  "ChessCorners",
   "TemplateNcc",
   "EdgeModelMatch",
   "RadialSymmetry",
   "RingGridTarget",
-  "ChessCorners",
   "CalibrationTarget",
 ];
 

@@ -3,12 +3,13 @@ import { useEffect } from "react";
 
 import type { FramePayload } from "../domain/camera";
 import type { RectF32 } from "../domain/geometry";
+import type { Detection } from "../domain/vision";
 
 type FrameCanvasInput = {
   canvasRef: RefObject<HTMLCanvasElement | null>;
   frame: FramePayload | null;
   roi: RectF32 | null;
-  detection: RectF32 | null;
+  detection: Detection | null;
 };
 
 export function useFrameCanvas({ canvasRef, frame, roi, detection }: FrameCanvasInput) {
@@ -21,7 +22,7 @@ function drawFrame(
   canvas: HTMLCanvasElement | null,
   frame: FramePayload | null,
   roi: RectF32 | null,
-  detection: RectF32 | null,
+  detection: Detection | null,
 ) {
   if (!canvas) return;
   const context = canvas.getContext("2d");
@@ -49,7 +50,7 @@ function drawFrame(
 
   context.putImageData(image, 0, 0);
   if (roi) drawRect(context, roi, "#d7a936");
-  if (detection) drawRect(context, detection, "#4fb286");
+  if (detection) drawDetection(context, detection);
 }
 
 function drawGray(bytes: Uint8Array, image: ImageData) {
@@ -80,6 +81,20 @@ function drawRect(context: CanvasRenderingContext2D, rect: RectF32, color: strin
   context.strokeStyle = color;
   context.lineWidth = Math.max(2, Math.round(context.canvas.width / 400));
   context.strokeRect(rect.x, rect.y, rect.width, rect.height);
+}
+
+function drawDetection(context: CanvasRenderingContext2D, detection: Detection) {
+  if (detection.bbox) drawRect(context, detection.bbox, "#4fb286");
+  const radius = Math.max(2, Math.round(context.canvas.width / 220));
+  context.fillStyle = "#8ee0bb";
+  context.strokeStyle = "#0d1116";
+  context.lineWidth = Math.max(1, Math.round(radius / 2));
+  for (const point of detection.points ?? []) {
+    context.beginPath();
+    context.arc(point.x, point.y, radius, 0, Math.PI * 2);
+    context.fill();
+    context.stroke();
+  }
 }
 
 function drawEmptyState(context: CanvasRenderingContext2D, canvas: HTMLCanvasElement) {

@@ -2,7 +2,8 @@
 
 use async_trait::async_trait;
 use comm_core::{
-    ApiError, CommandReceipt, ComponentIdentity, OperationId, Versioned, event, versioned,
+    ApiError, CommandReceipt, ComponentIdentity, CorrelationId, OperationId, Versioned, event,
+    versioned,
 };
 use comm_local::{
     CommandClient, CommandInbox, EventBus, MonotonicCounter, StateCell, command_channel,
@@ -122,91 +123,19 @@ impl Runtime {
     ) -> Result<CommandReceipt, ApiError> {
         match &command.kind {
             VisionCommandKind::SelectAlgorithm { algorithm } => {
-                self.state.selected_algorithm = *algorithm;
-                self.detector = None;
-                self.state.has_template = false;
-                self.state.lifecycle = if *algorithm == AlgorithmId::TemplateNcc {
-                    VisionLifecycle::WaitingForTemplate
-                } else {
-                    VisionLifecycle::Idle
-                };
-                self.publish(
-                    command.correlation_id,
-                    VisionEvent::AlgorithmSelected {
-                        algorithm: *algorithm,
-                    },
-                );
+                self.select_algorithm(*algorithm, command.correlation_id);
             }
             VisionCommandKind::SetRoi { roi } => {
-                self.state.roi = *roi;
-                self.detector = None;
-                self.state.has_template = false;
-                self.state.lifecycle = VisionLifecycle::WaitingForTemplate;
-                self.publish(
-                    command.correlation_id,
-                    VisionEvent::RoiChanged { roi: *roi },
-                );
+                self.set_roi(*roi, command.correlation_id);
             }
             VisionCommandKind::CaptureTemplate => {
-                if self.state.selected_algorithm != AlgorithmId::TemplateNcc {
-                    return Err(ApiError::Rejected(
-                        "template capture is only implemented for TemplateNcc in v1".into(),
-                    ));
-                }
-                let frame = self
-                    .latest_frame
-                    .as_ref()
-                    .ok_or_else(|| ApiError::Rejected("no camera frame available".into()))?;
-                let roi = self.state.roi.ok_or_else(|| {
-                    ApiError::Rejected("set an ROI before capturing a template".into())
-                })?;
-                let detector = TemplateNcc::capture(frame, roi)?;
-                let width = detector.width;
-                let height = detector.height;
-                self.detector = Some(ActiveDetector::TemplateNcc(detector));
-                self.state.has_template = true;
-                self.state.lifecycle = VisionLifecycle::Idle;
-                self.state.error = None;
-                self.publish(
-                    command.correlation_id,
-                    VisionEvent::TemplateCaptured { width, height },
-                );
+                self.capture_template(command.correlation_id)?;
             }
             VisionCommandKind::StartProcessing => {
-                if self.state.selected_algorithm == AlgorithmId::TemplateNcc
-                    && !matches!(self.detector, Some(ActiveDetector::TemplateNcc(_)))
-                {
-                    self.state.lifecycle = VisionLifecycle::WaitingForTemplate;
-                    self.store().await;
-                    return Err(ApiError::Rejected(
-                        "capture a template before starting processing".into(),
-                    ));
-                }
-                if self.detector.is_none() {
-                    self.detector = Some(ActiveDetector::for_algorithm(
-                        self.state.selected_algorithm,
-                        self.latest_frame.as_deref(),
-                    )?);
-                }
-                self.state.lifecycle = VisionLifecycle::Processing;
-                self.state.error = None;
-                self.started_at = Instant::now();
-                self.processed_frames = 0;
-                self.publish(
-                    command.correlation_id,
-                    VisionEvent::LifecycleChanged {
-                        lifecycle: self.state.lifecycle,
-                    },
-                );
+                self.start_processing(command.correlation_id).await?;
             }
             VisionCommandKind::StopProcessing => {
-                self.state.lifecycle = VisionLifecycle::Idle;
-                self.publish(
-                    command.correlation_id,
-                    VisionEvent::LifecycleChanged {
-                        lifecycle: self.state.lifecycle,
-                    },
-                );
+                self.stop_processing(command.correlation_id);
             }
         }
 
@@ -216,6 +145,93 @@ impl Runtime {
             operation_id: Some(OperationId::new()),
             accepted_revision,
         })
+    }
+
+    fn select_algorithm(&mut self, algorithm: AlgorithmId, correlation_id: Option<CorrelationId>) {
+        self.state.selected_algorithm = algorithm;
+        self.detector = None;
+        self.state.has_template = false;
+        self.state.lifecycle = lifecycle_for_algorithm(algorithm);
+        self.publish(correlation_id, VisionEvent::AlgorithmSelected { algorithm });
+    }
+
+    fn set_roi(&mut self, roi: Option<RectF32>, correlation_id: Option<CorrelationId>) {
+        self.state.roi = roi;
+        self.detector = None;
+        self.state.has_template = false;
+        self.state.lifecycle = lifecycle_for_algorithm(self.state.selected_algorithm);
+        self.publish(correlation_id, VisionEvent::RoiChanged { roi });
+    }
+
+    fn capture_template(&mut self, correlation_id: Option<CorrelationId>) -> Result<(), ApiError> {
+        if self.state.selected_algorithm != AlgorithmId::TemplateNcc {
+            return Err(ApiError::Rejected(
+                "template capture is only implemented for TemplateNcc in v1".into(),
+            ));
+        }
+        let frame = self
+            .latest_frame
+            .as_ref()
+            .ok_or_else(|| ApiError::Rejected("no camera frame available".into()))?;
+        let roi = self
+            .state
+            .roi
+            .ok_or_else(|| ApiError::Rejected("set an ROI before capturing a template".into()))?;
+        let detector = TemplateNcc::capture(frame, roi)?;
+        let width = detector.width;
+        let height = detector.height;
+        self.detector = Some(ActiveDetector::TemplateNcc(detector));
+        self.state.has_template = true;
+        self.state.lifecycle = VisionLifecycle::Idle;
+        self.state.error = None;
+        self.publish(
+            correlation_id,
+            VisionEvent::TemplateCaptured { width, height },
+        );
+        Ok(())
+    }
+
+    async fn start_processing(
+        &mut self,
+        correlation_id: Option<CorrelationId>,
+    ) -> Result<(), ApiError> {
+        if self.needs_template_before_processing() {
+            self.state.lifecycle = VisionLifecycle::WaitingForTemplate;
+            self.store().await;
+            return Err(ApiError::Rejected(
+                "capture a template before starting processing".into(),
+            ));
+        }
+        if self.detector.is_none() {
+            self.detector = Some(ActiveDetector::for_algorithm(
+                self.state.selected_algorithm,
+            )?);
+        }
+        self.state.lifecycle = VisionLifecycle::Processing;
+        self.state.error = None;
+        self.started_at = Instant::now();
+        self.processed_frames = 0;
+        self.publish_lifecycle(correlation_id);
+        Ok(())
+    }
+
+    fn stop_processing(&mut self, correlation_id: Option<CorrelationId>) {
+        self.state.lifecycle = VisionLifecycle::Idle;
+        self.publish_lifecycle(correlation_id);
+    }
+
+    fn needs_template_before_processing(&self) -> bool {
+        self.state.selected_algorithm == AlgorithmId::TemplateNcc
+            && !matches!(self.detector, Some(ActiveDetector::TemplateNcc(_)))
+    }
+
+    fn publish_lifecycle(&self, correlation_id: Option<CorrelationId>) {
+        self.publish(
+            correlation_id,
+            VisionEvent::LifecycleChanged {
+                lifecycle: self.state.lifecycle,
+            },
+        );
     }
 
     async fn process_latest_frame(&mut self) {
@@ -316,10 +332,7 @@ enum ActiveDetector {
 }
 
 impl ActiveDetector {
-    fn for_algorithm(
-        algorithm: AlgorithmId,
-        latest_frame: Option<&Frame>,
-    ) -> Result<Self, ApiError> {
+    fn for_algorithm(algorithm: AlgorithmId) -> Result<Self, ApiError> {
         match algorithm {
             AlgorithmId::TemplateNcc => Err(ApiError::Rejected(
                 "capture a template before starting TemplateNcc".into(),
@@ -338,11 +351,6 @@ impl ActiveDetector {
                 "EdgeModelMatch is deferred until vision-metrology is published".into(),
             )),
         }
-        .and_then(|detector| {
-            latest_frame
-                .map(|_| detector)
-                .ok_or_else(|| ApiError::Rejected("no camera frame available".into()))
-        })
     }
 
     fn detect(&mut self, frame: &Frame) -> Result<Option<Detection>, String> {
@@ -352,6 +360,14 @@ impl ActiveDetector {
             Self::ChessCorners(detector) => detect_chess_corners(detector.as_mut(), frame),
             Self::CalibrationTarget => detect_calibration_target(frame),
         }
+    }
+}
+
+fn lifecycle_for_algorithm(algorithm: AlgorithmId) -> VisionLifecycle {
+    if algorithm == AlgorithmId::TemplateNcc {
+        VisionLifecycle::WaitingForTemplate
+    } else {
+        VisionLifecycle::Idle
     }
 }
 

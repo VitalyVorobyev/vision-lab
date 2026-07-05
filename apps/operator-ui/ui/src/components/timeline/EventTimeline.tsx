@@ -8,7 +8,7 @@ export function EventTimeline({ events }: { events: EventSummary[] }) {
         <h2 className="text-sm font-semibold text-text">Event Timeline</h2>
         <span className="text-xs text-muted">{events.length} recent</span>
       </header>
-      <div className="max-h-52 overflow-auto">
+      <div className="max-h-40 overflow-auto">
         {events.length > 0 ? (
           events.map((event) => (
             <TimelineItem

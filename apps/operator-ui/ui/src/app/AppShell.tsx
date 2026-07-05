@@ -1,16 +1,15 @@
-import type { RefObject } from "react";
+import { useState, type RefObject } from "react";
 
+import { CameraConfigPanel } from "../components/controls/CameraConfigPanel";
 import { CameraControls } from "../components/controls/CameraControls";
 import { RecorderControls } from "../components/controls/RecorderControls";
 import { VisionControls } from "../components/controls/VisionControls";
 import { LiveViewport } from "../components/live/LiveViewport";
 import { SystemStatusBar } from "../components/status/SystemStatusBar";
-import { EventTimeline } from "../components/timeline/EventTimeline";
 import { Button } from "../components/ui/Button";
 import type { FramePayload } from "../domain/camera";
 import type { RectF32 } from "../domain/geometry";
 import type { SystemView } from "../domain/system";
-import { orderedRecentEvents } from "../domain/system";
 import type { AlgorithmId } from "../domain/vision";
 
 type CanvasHandlers = Parameters<typeof LiveViewport>[0]["canvasHandlers"];
@@ -24,7 +23,11 @@ export type AppShellProps = {
   error: string | null;
   pending: (key: string) => boolean;
   onDismissError: () => void;
+  onRunChess: () => void;
   onConnectCamera: () => void;
+  onRefreshCameraDevices: () => void;
+  onSelectCameraDevice: (deviceId: string) => void;
+  onSelectCameraFormat: (formatId: string) => void;
   onStartCamera: () => void;
   onStopCamera: () => void;
   onSetRequestedFps: (fps: number) => void;
@@ -46,7 +49,11 @@ export function AppShell({
   error,
   pending,
   onDismissError,
+  onRunChess,
   onConnectCamera,
+  onRefreshCameraDevices,
+  onSelectCameraDevice,
+  onSelectCameraFormat,
   onStartCamera,
   onStopCamera,
   onSetRequestedFps,
@@ -58,12 +65,13 @@ export function AppShell({
   onStartRecording,
   onStopRecording,
 }: AppShellProps) {
+  const [sidebarTab, setSidebarTab] = useState<"operate" | "config">("operate");
   const camera = view?.camera.value;
   const vision = view?.vision.value;
   const recorder = view?.recorder.value;
 
   return (
-    <main className="flex min-h-screen flex-col gap-4 bg-app p-4 text-text">
+    <main className="flex h-screen min-h-0 flex-col gap-3 overflow-hidden bg-app p-3 text-text">
       <SystemStatusBar
         camera={camera}
         recorder={recorder}
@@ -80,7 +88,7 @@ export function AppShell({
         </section>
       ) : null}
 
-      <section className="grid flex-1 border border-border bg-surface lg:grid-cols-[minmax(0,1fr)_380px]">
+      <section className="grid min-h-0 flex-1 border border-border bg-surface md:grid-cols-[minmax(0,1fr)_380px]">
         <LiveViewport
           camera={camera}
           canvasHandlers={canvasHandlers}
@@ -89,35 +97,71 @@ export function AppShell({
           recorder={recorder}
           vision={vision}
         />
-        <aside className="min-w-0 border-t border-border lg:border-l lg:border-t-0">
-          <CameraControls
-            camera={camera}
-            onConnect={onConnectCamera}
-            onSetRequestedFps={onSetRequestedFps}
-            onStart={onStartCamera}
-            onStop={onStopCamera}
-            pending={pending}
-          />
-          <VisionControls
-            onCaptureTemplate={onCaptureTemplate}
-            onClearRoi={onClearRoi}
-            onSelectAlgorithm={onSelectAlgorithm}
-            onStartProcessing={onStartProcessing}
-            onStopProcessing={onStopProcessing}
-            pending={pending}
-            pendingRoi={pendingRoi}
-            vision={vision}
-          />
-          <RecorderControls
-            onStartRecording={onStartRecording}
-            onStopRecording={onStopRecording}
-            pending={pending}
-            recorder={recorder}
-          />
+        <aside className="min-h-0 min-w-0 overflow-y-auto border-t border-border md:border-l md:border-t-0">
+          <div className="sticky top-0 z-10 grid grid-cols-2 border-b border-border bg-surface">
+            <button
+              className={tabClass(sidebarTab === "operate")}
+              onClick={() => setSidebarTab("operate")}
+              type="button"
+            >
+              Operate
+            </button>
+            <button
+              className={tabClass(sidebarTab === "config")}
+              onClick={() => setSidebarTab("config")}
+              type="button"
+            >
+              Config
+            </button>
+          </div>
+          {sidebarTab === "operate" ? (
+            <>
+              <CameraControls
+                camera={camera}
+                onConnect={onConnectCamera}
+                onSetRequestedFps={onSetRequestedFps}
+                onStart={onStartCamera}
+                onStop={onStopCamera}
+                pending={pending}
+              />
+              <VisionControls
+                onCaptureTemplate={onCaptureTemplate}
+                onClearRoi={onClearRoi}
+                onRunChess={onRunChess}
+                onSelectAlgorithm={onSelectAlgorithm}
+                onStartProcessing={onStartProcessing}
+                onStopProcessing={onStopProcessing}
+                pending={pending}
+                pendingRoi={pendingRoi}
+                vision={vision}
+              />
+              <RecorderControls
+                onStartRecording={onStartRecording}
+                onStopRecording={onStopRecording}
+                pending={pending}
+                recorder={recorder}
+              />
+            </>
+          ) : (
+            <CameraConfigPanel
+              camera={camera}
+              onRefreshDevices={onRefreshCameraDevices}
+              onSelectDevice={onSelectCameraDevice}
+              onSelectFormat={onSelectCameraFormat}
+              pending={pending}
+            />
+          )}
         </aside>
       </section>
-
-      <EventTimeline events={orderedRecentEvents(view)} />
     </main>
   );
+}
+
+function tabClass(active: boolean) {
+  return [
+    "min-h-10 border-b px-3 text-sm font-medium transition-colors",
+    active
+      ? "border-accent bg-surface-strong text-text"
+      : "border-transparent text-muted hover:bg-surface-hover hover:text-text",
+  ].join(" ");
 }

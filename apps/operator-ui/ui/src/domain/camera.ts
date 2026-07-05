@@ -14,8 +14,43 @@ export type FramePayload = {
   data_base64: string;
 };
 
+export type CameraPermissionStatus =
+  | "Unknown"
+  | "NotDetermined"
+  | "Authorized"
+  | "Denied"
+  | "Restricted";
+
+export type CameraPosition = "Unknown" | "Front" | "Back" | "External";
+
+export type CameraTransport = "Unknown" | "BuiltIn" | "Continuity" | "Usb" | "Virtual";
+
+export type CameraFormatInfo = {
+  id: string;
+  width: number;
+  height: number;
+  pixel_format: PixelFormat;
+  min_fps: number;
+  max_fps: number;
+};
+
+export type CameraDeviceInfo = {
+  id: string;
+  display_name: string;
+  model_id?: string | null;
+  manufacturer?: string | null;
+  position: CameraPosition;
+  transport: CameraTransport;
+  is_default: boolean;
+  formats: CameraFormatInfo[];
+};
+
 export type CameraState = {
   lifecycle: string;
+  available_devices: CameraDeviceInfo[];
+  active_device_id?: string | null;
+  active_format_id?: string | null;
+  permission_status: CameraPermissionStatus;
   requested_fps: number;
   actual_fps: number;
   frame_width: number;
@@ -28,4 +63,13 @@ export type CameraState = {
 export function frameSizeLabel(frame: FramePayload | null): string {
   if (!frame) return "No frame";
   return `${frame.meta.width}x${frame.meta.height}`;
+}
+
+export function activeCameraDevice(camera?: CameraState) {
+  return camera?.available_devices.find((device) => device.id === camera.active_device_id) ?? null;
+}
+
+export function activeCameraFormat(camera?: CameraState) {
+  const device = activeCameraDevice(camera);
+  return device?.formats.find((format) => format.id === camera?.active_format_id) ?? null;
 }

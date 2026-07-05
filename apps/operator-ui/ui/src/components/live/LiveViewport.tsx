@@ -31,10 +31,10 @@ export function LiveViewport({
   canvasHandlers: CanvasHandlers;
 }) {
   return (
-    <section className="flex min-h-[520px] min-w-0 flex-col border-r border-border bg-surface">
+    <section className="flex min-h-0 min-w-0 flex-col bg-surface">
       <ViewportToolbar camera={camera} frame={frame} vision={vision} />
-      <div className="relative min-h-0 flex-1 overflow-hidden bg-canvas">
-        <FrameCanvas canvasRef={canvasRef} handlers={canvasHandlers} />
+      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-canvas p-3">
+        <FrameCanvas canvasRef={canvasRef} frame={frame} handlers={canvasHandlers} />
         <OverlayLayer
           detection={vision?.last_detection}
           hasFrame={frame !== null}

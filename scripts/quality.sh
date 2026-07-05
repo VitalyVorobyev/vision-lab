@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if command -v rg >/dev/null 2>&1; then
+  allow_matches=$(rg -n --glob '*.rs' '#!?\[allow\(' . || true)
+else
+  allow_matches=$(find . -name '*.rs' -not -path './target/*' -print0 \
+    | xargs -0 grep -nE '#!?\[allow\(' || true)
+fi
+
+if [[ -n "$allow_matches" ]]; then
+  echo "$allow_matches"
+  echo "Rust allow attributes are forbidden; remove the attribute or refactor the code." >&2
+  exit 1
+fi
+
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace

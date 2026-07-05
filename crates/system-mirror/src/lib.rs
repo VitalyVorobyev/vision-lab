@@ -256,6 +256,13 @@ impl SequenceTracker {
 fn summarize_camera(event: EventEnvelope<CameraEvent>) -> EventSummary {
     summarize(event, |payload| match payload {
         CameraEvent::LifecycleChanged { lifecycle } => format!("camera lifecycle: {lifecycle:?}"),
+        CameraEvent::DevicesChanged { count } => format!("camera devices changed: {count}"),
+        CameraEvent::ActiveConfigChanged {
+            device_id,
+            format_id,
+        } => {
+            format!("camera active config: {device_id:?} / {format_id:?}")
+        }
         CameraEvent::RequestedFpsChanged { fps } => format!("camera requested fps: {fps:.1}"),
         CameraEvent::FrameProduced { frame_id } => format!("frame produced: {frame_id}"),
         CameraEvent::DroppedFramesChanged { dropped_frames } => {

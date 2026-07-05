@@ -18,12 +18,12 @@ export function ViewportToolbar({
         <h2 className="text-sm font-semibold text-text">Live Camera</h2>
         <p className="mt-1 text-xs text-muted">
           Frame {camera?.frame_id ?? 0} · {(camera?.actual_fps ?? 0).toFixed(1)} fps ·{" "}
-          {algorithmLabel(vision?.selected_algorithm ?? "TemplateNcc")}
+          {algorithmLabel(vision?.selected_algorithm ?? "ChessCorners")}
         </p>
       </div>
       <div className="flex flex-wrap gap-4 text-xs text-muted">
         <span>{frameSizeLabel(frame)}</span>
-        <span>{camera?.dropped_frames ?? 0} dropped</span>
+        <span>{camera?.dropped_frames ?? 0} capture drops</span>
       </div>
     </div>
   );

@@ -1,100 +1,191 @@
 use camera_mac::CameraComponent;
 use std::{sync::Arc, time::Duration};
 use system_mirror::SystemMirror;
-use tempfile::tempdir;
+use tempfile::{TempDir, tempdir};
 use tokio::time::sleep;
 use vision_contracts::{
-    CameraApi, CameraCommand, CameraCommandKind, RecorderApi, RecorderCommand, RecorderCommandKind,
-    RectF32, VisionApi, VisionCommand, VisionCommandKind,
+    AlgorithmId, CameraApi, CameraCommand, CameraCommandKind, RecorderApi, RecorderCommand,
+    RecorderCommandKind, RectF32, VisionApi, VisionCommand, VisionCommandKind,
 };
 use vision_processing::VisionComponent;
 
+struct TestStack {
+    camera: Arc<dyn CameraApi>,
+    vision: Arc<dyn VisionApi>,
+    recorder: Arc<dyn RecorderApi>,
+    mirror: Arc<SystemMirror>,
+    _temp: TempDir,
+}
+
+impl TestStack {
+    async fn spawn() -> Self {
+        let camera = CameraComponent::spawn_simulated("test-camera");
+        let camera_api: Arc<dyn CameraApi> = camera;
+        let vision = VisionComponent::spawn("test-vision", camera_api.clone())
+            .await
+            .unwrap();
+        let vision_api: Arc<dyn VisionApi> = vision;
+        let temp = tempdir().unwrap();
+        let recorder = recorder::RecorderComponent::spawn(
+            "test-recorder",
+            camera_api.clone(),
+            vision_api.clone(),
+            temp.path().to_path_buf(),
+        )
+        .await
+        .unwrap();
+        let recorder_api: Arc<dyn RecorderApi> = recorder;
+        let mirror =
+            SystemMirror::spawn(camera_api.clone(), vision_api.clone(), recorder_api.clone())
+                .await
+                .unwrap();
+        Self {
+            camera: camera_api,
+            vision: vision_api,
+            recorder: recorder_api,
+            mirror,
+            _temp: temp,
+        }
+    }
+
+    async fn start_camera(&self) {
+        self.camera
+            .submit(CameraCommand::new(CameraCommandKind::Connect))
+            .await
+            .unwrap();
+        self.camera
+            .submit(CameraCommand::new(CameraCommandKind::StartStream))
+            .await
+            .unwrap();
+    }
+
+    async fn next_frame(&self) -> Arc<vision_contracts::Frame> {
+        let mut frames = self.camera.subscribe_frames().await.unwrap();
+        loop {
+            frames.changed().await.unwrap();
+            if let Some(frame) = frames.borrow().clone() {
+                break frame;
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn camera_sim_command_event_state_detection_flow() {
-    let camera = CameraComponent::spawn_simulated("test-camera");
-    let camera_api: Arc<dyn CameraApi> = camera;
-    let vision = VisionComponent::spawn("test-vision", camera_api.clone())
-        .await
-        .unwrap();
-    let vision_api: Arc<dyn VisionApi> = vision;
-    let temp = tempdir().unwrap();
-    let recorder = recorder::RecorderComponent::spawn(
-        "test-recorder",
-        camera_api.clone(),
-        vision_api.clone(),
-        temp.path().to_path_buf(),
-    )
-    .await
-    .unwrap();
-    let recorder_api: Arc<dyn RecorderApi> = recorder;
-    let mirror = SystemMirror::spawn(camera_api.clone(), vision_api.clone(), recorder_api.clone())
-        .await
-        .unwrap();
+    let stack = TestStack::spawn().await;
+    stack.start_camera().await;
 
-    camera_api
-        .submit(CameraCommand::new(CameraCommandKind::Connect))
+    let frame = stack.next_frame().await;
+    let roi = template_roi(&frame).expect("sim frame should contain a textured target");
+    stack
+        .vision
+        .submit(VisionCommand::new(VisionCommandKind::SelectAlgorithm {
+            algorithm: AlgorithmId::TemplateNcc,
+        }))
         .await
         .unwrap();
-    camera_api
-        .submit(CameraCommand::new(CameraCommandKind::StartStream))
-        .await
-        .unwrap();
-
-    let mut frames = camera_api.subscribe_frames().await.unwrap();
-    let frame = loop {
-        frames.changed().await.unwrap();
-        if let Some(frame) = frames.borrow().clone() {
-            break frame;
-        }
-    };
-    let roi = bright_bbox(&frame).expect("sim frame should contain a textured target");
-    vision_api
+    stack
+        .vision
         .submit(VisionCommand::new(VisionCommandKind::SetRoi {
             roi: Some(roi),
         }))
         .await
         .unwrap();
-    vision_api
+    stack
+        .vision
         .submit(VisionCommand::new(VisionCommandKind::CaptureTemplate))
         .await
         .unwrap();
-    vision_api
+
+    start_processing_and_recording(&stack).await;
+    assert_template_progress(&stack).await;
+    stop_all(&stack).await;
+}
+
+#[tokio::test]
+async fn chess_online_flow_produces_overlay_points() {
+    let stack = TestStack::spawn().await;
+    stack.start_camera().await;
+    stack
+        .vision
+        .submit(VisionCommand::new(VisionCommandKind::SelectAlgorithm {
+            algorithm: AlgorithmId::ChessCorners,
+        }))
+        .await
+        .unwrap();
+    stack
+        .vision
         .submit(VisionCommand::new(VisionCommandKind::StartProcessing))
         .await
         .unwrap();
-    recorder_api
+
+    let detected = wait_until(&stack, |view| {
+        view.vision
+            .value
+            .last_detection
+            .as_ref()
+            .is_some_and(|detection| {
+                detection.method == AlgorithmId::ChessCorners && !detection.points.is_empty()
+            })
+    })
+    .await;
+    assert!(detected, "mirror should observe ChESS detection points");
+    stop_all(&stack).await;
+}
+
+async fn start_processing_and_recording(stack: &TestStack) {
+    stack
+        .vision
+        .submit(VisionCommand::new(VisionCommandKind::StartProcessing))
+        .await
+        .unwrap();
+    stack
+        .recorder
         .submit(RecorderCommand::new(RecorderCommandKind::StartRecording {
             max_fps: 20.0,
         }))
         .await
         .unwrap();
+}
 
-    let mut detected = false;
-    for _ in 0..30 {
-        sleep(Duration::from_millis(50)).await;
-        let view = mirror.current().await;
-        if view.vision.value.last_detection.is_some() && view.recorder.value.recorded_frames > 0 {
-            detected = true;
-            break;
-        }
-    }
+async fn assert_template_progress(stack: &TestStack) {
+    let detected = wait_until(stack, |view| {
+        view.vision.value.last_detection.is_some() && view.recorder.value.recorded_frames > 0
+    })
+    .await;
     assert!(
         detected,
         "mirror should observe detection and recorder progress"
     );
+}
 
-    recorder_api
+async fn wait_until(
+    stack: &TestStack,
+    matches: impl Fn(&system_mirror::SystemView) -> bool,
+) -> bool {
+    for _ in 0..30 {
+        sleep(Duration::from_millis(50)).await;
+        let view = stack.mirror.current().await;
+        if matches(&view) {
+            return true;
+        }
+    }
+    false
+}
+
+async fn stop_all(stack: &TestStack) {
+    let _ = stack
+        .recorder
         .submit(RecorderCommand::new(RecorderCommandKind::StopRecording))
-        .await
-        .unwrap();
-    vision_api
+        .await;
+    let _ = stack
+        .vision
         .submit(VisionCommand::new(VisionCommandKind::StopProcessing))
-        .await
-        .unwrap();
-    camera_api
+        .await;
+    let _ = stack
+        .camera
         .submit(CameraCommand::new(CameraCommandKind::StopStream))
-        .await
-        .unwrap();
+        .await;
 }
 
 fn bright_bbox(frame: &vision_contracts::Frame) -> Option<RectF32> {
@@ -118,5 +209,15 @@ fn bright_bbox(frame: &vision_contracts::Frame) -> Option<RectF32> {
         y: min_y as f32,
         width: (max_x - min_x + 1) as f32,
         height: (max_y - min_y + 1) as f32,
+    })
+}
+
+fn template_roi(frame: &vision_contracts::Frame) -> Option<RectF32> {
+    let target = bright_bbox(frame)?;
+    Some(RectF32 {
+        x: target.x,
+        y: target.y,
+        width: 12.0,
+        height: 12.0,
     })
 }

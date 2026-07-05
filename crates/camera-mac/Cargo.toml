@@ -8,13 +8,58 @@ license.workspace = true
 [features]
 default = ["camera-sim"]
 camera-sim = []
-real-camera = []
+real-camera = [
+    "block2",
+    "dispatch2",
+    "objc2",
+    "objc2-av-foundation",
+    "objc2-core-media",
+    "objc2-core-video",
+    "objc2-foundation",
+]
 
 [dependencies]
 async-trait.workspace = true
+block2 = { version = "0.6.2", optional = true }
 bytes.workspace = true
 comm-core.workspace = true
 comm-local.workspace = true
+dispatch2 = { version = "0.3.1", optional = true }
+objc2 = { version = "0.6.4", optional = true }
+objc2-av-foundation = { version = "0.3.2", default-features = false, features = [
+    "AVCaptureDevice",
+    "AVCaptureInput",
+    "AVCaptureOutput",
+    "AVCaptureOutputBase",
+    "AVCaptureSession",
+    "AVCaptureSessionPreset",
+    "AVCaptureVideoDataOutput",
+    "AVMediaFormat",
+    "block2",
+    "dispatch2",
+    "objc2-core-media",
+], optional = true }
+objc2-core-media = { version = "0.3.2", default-features = false, features = [
+    "CMFormatDescription",
+    "CMSampleBuffer",
+    "CMTime",
+    "objc2-core-video",
+], optional = true }
+objc2-core-video = { version = "0.3.2", default-features = false, features = [
+    "CVBase",
+    "CVBuffer",
+    "CVImageBuffer",
+    "CVPixelBuffer",
+    "CVReturn",
+], optional = true }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "NSArray",
+    "NSDictionary",
+    "NSError",
+    "NSObject",
+    "NSValue",
+    "NSString",
+], optional = true }
 tokio.workspace = true
 vision-contracts.workspace = true
 

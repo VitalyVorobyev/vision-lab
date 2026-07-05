@@ -15,12 +15,12 @@ export function SystemStatusBar({
   resyncCount: number;
 }) {
   return (
-    <header className="grid gap-4 border border-border bg-surface px-4 py-3 lg:grid-cols-[minmax(180px,1fr)_auto] lg:items-center">
+    <header className="grid gap-4 border border-border bg-surface px-4 py-3 md:grid-cols-[minmax(180px,1fr)_auto] md:items-center">
       <div>
         <h1 className="text-xl font-semibold text-text">Vision Lab</h1>
         <p className="mt-1 text-sm text-muted">Local acquisition, detection, and recording console</p>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2 lg:min-w-[620px] lg:grid-cols-[1fr_1fr_1fr_92px]">
+      <div className="grid gap-3 sm:grid-cols-2 md:min-w-[620px] md:grid-cols-[1fr_1fr_1fr_92px]">
         <ComponentHealth label="Camera" state={camera} />
         <ComponentHealth label="Vision" state={vision} />
         <ComponentHealth label="Recorder" state={recorder} />
