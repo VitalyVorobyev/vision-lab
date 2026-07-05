@@ -1,6 +1,7 @@
 import type { PointerEventHandler, RefObject } from "react";
 
 import type { CameraState, FramePayload } from "../../domain/camera";
+import type { OverlayKey, OverlayVisibility } from "../../domain/overlays";
 import type { RecorderState } from "../../domain/recorder";
 import type { VisionState } from "../../domain/vision";
 import { FrameCanvas } from "./FrameCanvas";
@@ -22,6 +23,8 @@ export function LiveViewport({
   frame,
   canvasRef,
   canvasHandlers,
+  overlays,
+  onToggleOverlay,
 }: {
   camera?: CameraState;
   vision?: VisionState;
@@ -29,6 +32,8 @@ export function LiveViewport({
   frame: FramePayload | null;
   canvasRef: RefObject<HTMLCanvasElement | null>;
   canvasHandlers: CanvasHandlers;
+  overlays: OverlayVisibility;
+  onToggleOverlay: (key: OverlayKey) => void;
 }) {
   return (
     <section className="flex min-h-0 min-w-0 flex-col bg-surface">
@@ -38,6 +43,8 @@ export function LiveViewport({
         <OverlayLayer
           detection={vision?.last_detection}
           hasFrame={frame !== null}
+          onToggleOverlay={onToggleOverlay}
+          overlays={overlays}
           recording={recorder?.lifecycle.toLowerCase() === "recording"}
         />
       </div>

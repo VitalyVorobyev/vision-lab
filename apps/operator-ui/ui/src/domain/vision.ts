@@ -42,6 +42,13 @@ export const algorithms: AlgorithmId[] = [
   "CalibrationTarget",
 ];
 
+export const runnableAlgorithms: AlgorithmId[] = [
+  "ChessCorners",
+  "CalibrationTarget",
+  "RadialSymmetry",
+  "TemplateNcc",
+];
+
 export function algorithmLabel(algorithm: AlgorithmId): string {
   switch (algorithm) {
     case "TemplateNcc":

@@ -2,7 +2,7 @@ import { CircleDot, Pause, Radio, ScanLine, ScanSearch } from "lucide-react";
 
 import type { RectF32 } from "../../domain/geometry";
 import type { AlgorithmId, VisionState } from "../../domain/vision";
-import { algorithmLabel, algorithms } from "../../domain/vision";
+import { algorithmLabel, runnableAlgorithms } from "../../domain/vision";
 import { Button } from "../ui/Button";
 import { MetricGrid } from "../ui/Metric";
 import { Panel } from "../ui/Panel";
@@ -62,7 +62,7 @@ export function VisionControls({
           onChange={(event) => onSelectAlgorithm(event.currentTarget.value as AlgorithmId)}
           value={selectedAlgorithm}
         >
-          {algorithms.map((algorithm) => (
+          {runnableAlgorithms.map((algorithm) => (
             <option key={algorithm} value={algorithm}>
               {algorithmLabel(algorithm)}
             </option>
