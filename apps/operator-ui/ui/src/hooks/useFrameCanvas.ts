@@ -3,6 +3,7 @@ import { useEffect } from "react";
 
 import type { FramePayload } from "../domain/camera";
 import type { RectF32 } from "../domain/geometry";
+import type { OverlayVisibility } from "../domain/overlays";
 import type { Detection } from "../domain/vision";
 
 type FrameCanvasInput = {
@@ -10,12 +11,13 @@ type FrameCanvasInput = {
   frame: FramePayload | null;
   roi: RectF32 | null;
   detection: Detection | null;
+  overlays: OverlayVisibility;
 };
 
-export function useFrameCanvas({ canvasRef, frame, roi, detection }: FrameCanvasInput) {
+export function useFrameCanvas({ canvasRef, frame, roi, detection, overlays }: FrameCanvasInput) {
   useEffect(() => {
-    drawFrame(canvasRef.current, frame, roi, detection);
-  }, [canvasRef, frame, roi, detection]);
+    drawFrame(canvasRef.current, frame, roi, detection, overlays);
+  }, [canvasRef, frame, roi, detection, overlays]);
 }
 
 function drawFrame(
@@ -23,6 +25,7 @@ function drawFrame(
   frame: FramePayload | null,
   roi: RectF32 | null,
   detection: Detection | null,
+  overlays: OverlayVisibility,
 ) {
   if (!canvas) return;
   const context = canvas.getContext("2d");
@@ -49,8 +52,8 @@ function drawFrame(
   }
 
   context.putImageData(image, 0, 0);
-  if (roi) drawRect(context, roi, "#d7a936");
-  if (detection) drawDetection(context, detection);
+  if (roi && overlays.roi) drawRect(context, roi, "#d7a936");
+  if (detection) drawDetection(context, detection, overlays);
 }
 
 function drawGray(bytes: Uint8Array, image: ImageData) {
@@ -83,8 +86,13 @@ function drawRect(context: CanvasRenderingContext2D, rect: RectF32, color: strin
   context.strokeRect(rect.x, rect.y, rect.width, rect.height);
 }
 
-function drawDetection(context: CanvasRenderingContext2D, detection: Detection) {
-  if (detection.bbox) drawRect(context, detection.bbox, "#4fb286");
+function drawDetection(
+  context: CanvasRenderingContext2D,
+  detection: Detection,
+  overlays: OverlayVisibility,
+) {
+  if (detection.bbox && overlays.bbox) drawRect(context, detection.bbox, "#e2b94c");
+  if (!overlays.points) return;
   const radius = Math.max(2, Math.round(context.canvas.width / 220));
   context.fillStyle = "#8ee0bb";
   context.strokeStyle = "#0d1116";

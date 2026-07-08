@@ -1,6 +1,11 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import type { RectF32 } from "../domain/geometry";
+import {
+  defaultOverlayVisibility,
+  type OverlayKey,
+  type OverlayVisibility,
+} from "../domain/overlays";
 import type { AlgorithmId } from "../domain/vision";
 import { useCommandStatus } from "../hooks/useCommandStatus";
 import { useFrameCanvas } from "../hooks/useFrameCanvas";
@@ -31,6 +36,7 @@ export function App() {
   const latestFrame = useLatestFrame();
   const commands = useCommandStatus();
   const vision = system.view?.vision.value;
+  const [overlays, setOverlays] = useState<OverlayVisibility>(defaultOverlayVisibility);
 
   const commitRoi = useCallback(
     (roi: RectF32) => {
@@ -46,6 +52,7 @@ export function App() {
     canvasRef,
     detection: vision?.last_detection ?? null,
     frame: latestFrame.frame,
+    overlays,
     roi: activeRoi,
   });
 
@@ -64,6 +71,9 @@ export function App() {
       canvasRef={canvasRef}
       error={error}
       frame={latestFrame.frame}
+      onToggleOverlay={(key: OverlayKey) =>
+        setOverlays((current) => ({ ...current, [key]: !current[key] }))
+      }
       onCaptureTemplate={() => void commands.execute("capture-template", captureTemplate)}
       onClearRoi={() => void commands.execute("clear-roi", () => setRoi(null))}
       onConnectCamera={() => void commands.execute("connect-camera", connectCamera)}
@@ -96,6 +106,7 @@ export function App() {
       onStopRecording={() => void commands.execute("stop-recording", stopRecording)}
       pending={commands.isPending}
       pendingRoi={roi.pendingRoi}
+      overlays={overlays}
       view={system.view}
     />
   );

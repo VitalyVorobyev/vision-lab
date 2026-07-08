@@ -17,7 +17,7 @@ export function Metric({ label, value, tone = "neutral" }: MetricProps) {
   return (
     <div className="min-w-0 border border-border bg-surface-muted px-3 py-2">
       <p className="truncate text-xs text-muted">{label}</p>
-      <strong className={clsx("mt-1 block truncate text-sm font-semibold", toneClass[tone])}>
+      <strong className={clsx("mt-1 block truncate font-mono text-sm font-semibold", toneClass[tone])}>
         {value}
       </strong>
     </div>
