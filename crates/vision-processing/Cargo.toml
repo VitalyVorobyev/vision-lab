@@ -14,6 +14,7 @@ async-trait.workspace = true
 bytes.workspace = true
 calib-targets = { workspace = true, optional = true }
 chess-corners = { workspace = true, optional = true }
+image.workspace = true
 comm-core.workspace = true
 comm-local.workspace = true
 radsym = { workspace = true, optional = true }

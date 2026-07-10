@@ -6,11 +6,12 @@ import {
   type OverlayKey,
   type OverlayVisibility,
 } from "../domain/overlays";
-import type { AlgorithmId } from "../domain/vision";
+import type { AlgorithmId, RingGridTargetConfig } from "../domain/vision";
 import { useCommandStatus } from "../hooks/useCommandStatus";
 import { useFrameCanvas } from "../hooks/useFrameCanvas";
 import { useLatestFrame } from "../hooks/useLatestFrame";
 import { useRoiInteraction } from "../hooks/useRoiInteraction";
+import { useReplay } from "../hooks/useReplay";
 import { useSystemView } from "../hooks/useSystemView";
 import {
   captureTemplate,
@@ -20,6 +21,7 @@ import {
   selectCameraDevice,
   selectCameraFormat,
   setRequestedFps,
+  setRingGridTargetConfig,
   setRoi,
   startCamera,
   startProcessing,
@@ -32,10 +34,12 @@ import { AppShell } from "./AppShell";
 
 export function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const replayCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const system = useSystemView();
   const latestFrame = useLatestFrame();
   const commands = useCommandStatus();
   const vision = system.view?.vision.value;
+  const replay = useReplay();
   const [overlays, setOverlays] = useState<OverlayVisibility>(defaultOverlayVisibility);
 
   const commitRoi = useCallback(
@@ -54,6 +58,13 @@ export function App() {
     frame: latestFrame.frame,
     overlays,
     roi: activeRoi,
+  });
+  useFrameCanvas({
+    canvasRef: replayCanvasRef,
+    detection: null,
+    frame: replay.frame,
+    overlays,
+    roi: null,
   });
 
   const error = commands.error ?? system.error ?? latestFrame.error;
@@ -89,6 +100,9 @@ export function App() {
       onSelectAlgorithm={(algorithm: AlgorithmId) =>
         void commands.execute("select-algorithm", () => selectAlgorithm(algorithm))
       }
+      onSetRingGridTargetConfig={(config: RingGridTargetConfig) =>
+        void commands.execute("set-ringgrid-target-config", () => setRingGridTargetConfig(config))
+      }
       onSelectCameraDevice={(deviceId: string) =>
         void commands.execute("select-camera-device", () => selectCameraDevice(deviceId))
       }
@@ -106,6 +120,8 @@ export function App() {
       onStopRecording={() => void commands.execute("stop-recording", stopRecording)}
       pending={commands.isPending}
       pendingRoi={roi.pendingRoi}
+      replay={replay}
+      replayCanvasRef={replayCanvasRef}
       overlays={overlays}
       view={system.view}
     />

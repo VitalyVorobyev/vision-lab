@@ -97,8 +97,9 @@ Implemented in v1:
 
 Selectable extension points:
 
-- `RingGridTarget`: `ringgrid`, deferred until the public commands carry target
-  layout configuration.
+- `RingGridTarget`: `ringgrid` using a validated coded-hex target configuration
+  carried by `VisionState`; detected marker centers remain in image-pixel
+  coordinates and are published through the normalized detection contract.
 - `EdgeModelMatch`: intended for `vision-metrology` after that crate is
   published
 

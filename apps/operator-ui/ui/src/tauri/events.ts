@@ -13,3 +13,8 @@ export function subscribeLatestFrame(onEvent: (frame: FramePayload) => void) {
   if (!isTauriHost()) return Promise.resolve(() => undefined);
   return listen<FramePayload>("frame", (event) => onEvent(event.payload));
 }
+
+export function subscribeLatestReplayFrame(onEvent: (frame: FramePayload) => void) {
+  if (!isTauriHost()) return Promise.resolve(() => undefined);
+  return listen<FramePayload>("replay-frame", (event) => onEvent(event.payload));
+}

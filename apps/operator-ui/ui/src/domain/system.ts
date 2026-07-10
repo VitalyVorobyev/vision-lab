@@ -50,6 +50,14 @@ export const emptySystemView: SystemView = {
     value: {
       lifecycle: "Offline",
       selected_algorithm: "ChessCorners",
+      ringgrid_target: {
+        rows: 15,
+        long_row_cols: 14,
+        pitch_mm: 8,
+        outer_radius_mm: 4.8,
+        inner_radius_mm: 3.2,
+        ring_width_mm: 1.152,
+      },
       roi: null,
       has_template: false,
       input_fps: 0,

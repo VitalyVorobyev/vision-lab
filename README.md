@@ -62,6 +62,8 @@ Implemented:
 - template capture and normalized cross-correlation processing
 - published feature-detector wiring for `radsym`, `chess-corners`, and
   `calib-targets`
+- configurable coded-hex `ringgrid` target detection with image-pixel marker
+  overlays
 - session recording to JSONL plus PGM frames
 - system mirror with sequence-gap resync behavior
 - compact Tauri/React operator UI
@@ -70,8 +72,7 @@ Not implemented yet:
 
 - remote IPC transport
 - browser deployment
-- `ringgrid` runtime adapter configuration; the crate is present, but target
-  layout commands are not part of the v1 UI contract yet
+- RingGrid target variants beyond the editable coded-hex configuration
 - `vision-metrology` integration, deferred until its crate is published
 
 The public algorithm selection includes extension points for `radsym`,

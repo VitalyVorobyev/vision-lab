@@ -278,6 +278,10 @@ fn summarize_vision(event: EventEnvelope<VisionEvent>) -> EventSummary {
         VisionEvent::AlgorithmSelected { algorithm } => {
             format!("algorithm selected: {algorithm:?}")
         }
+        VisionEvent::RingGridTargetConfigChanged { config } => format!(
+            "RingGrid target configured: {} rows x {} columns at {:.3} mm pitch",
+            config.rows, config.long_row_cols, config.pitch_mm
+        ),
         VisionEvent::RoiChanged { roi } => format!("ROI changed: {roi:?}"),
         VisionEvent::TemplateCaptured { width, height } => {
             format!("template captured: {width}x{height}")

@@ -9,6 +9,15 @@ export type AlgorithmId =
   | "ChessCorners"
   | "CalibrationTarget";
 
+export type RingGridTargetConfig = {
+  rows: number;
+  long_row_cols: number;
+  pitch_mm: number;
+  outer_radius_mm: number;
+  inner_radius_mm: number;
+  ring_width_mm: number;
+};
+
 export type Detection = {
   frame_id: number;
   object_id: string;
@@ -23,6 +32,7 @@ export type Detection = {
 export type VisionState = {
   lifecycle: string;
   selected_algorithm: AlgorithmId;
+  ringgrid_target: RingGridTargetConfig;
   roi?: RectF32 | null;
   has_template: boolean;
   input_fps: number;
@@ -46,6 +56,7 @@ export const runnableAlgorithms: AlgorithmId[] = [
   "ChessCorners",
   "CalibrationTarget",
   "RadialSymmetry",
+  "RingGridTarget",
   "TemplateNcc",
 ];
 
@@ -58,7 +69,7 @@ export function algorithmLabel(algorithm: AlgorithmId): string {
     case "RadialSymmetry":
       return "Radial symmetry";
     case "RingGridTarget":
-      return "Ring grid";
+      return "RingGrid target";
     case "ChessCorners":
       return "Chess corners";
     case "CalibrationTarget":

@@ -8,14 +8,16 @@ use comm_core::{
 use comm_local::{
     CommandClient, CommandInbox, EventBus, MonotonicCounter, StateCell, command_channel,
 };
+use image::GrayImage;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::sync::watch;
 use vision_contracts::{
-    AlgorithmId, CameraApi, Detection, Frame, PointF32, RectF32, VisionApi, VisionCommand,
-    VisionCommandKind, VisionEvent, VisionEventStream, VisionLifecycle, VisionState,
+    AlgorithmId, CameraApi, Detection, Frame, PixelFormat, PointF32, RectF32, RingGridTargetConfig,
+    VisionApi, VisionCommand, VisionCommandKind, VisionEvent, VisionEventStream, VisionLifecycle,
+    VisionState,
 };
 
 #[derive(Clone)]
@@ -125,6 +127,9 @@ impl Runtime {
             VisionCommandKind::SelectAlgorithm { algorithm } => {
                 self.select_algorithm(*algorithm, command.correlation_id);
             }
+            VisionCommandKind::SetRingGridTargetConfig { config } => {
+                self.set_ringgrid_target_config(config, command.correlation_id)?;
+            }
             VisionCommandKind::SetRoi { roi } => {
                 self.set_roi(*roi, command.correlation_id);
             }
@@ -161,6 +166,29 @@ impl Runtime {
         self.state.has_template = false;
         self.state.lifecycle = lifecycle_for_algorithm(self.state.selected_algorithm);
         self.publish(correlation_id, VisionEvent::RoiChanged { roi });
+    }
+
+    fn set_ringgrid_target_config(
+        &mut self,
+        config: &RingGridTargetConfig,
+        correlation_id: Option<CorrelationId>,
+    ) -> Result<(), ApiError> {
+        if self.state.lifecycle == VisionLifecycle::Processing {
+            return Err(ApiError::Rejected(
+                "stop processing before changing the RingGrid target configuration".into(),
+            ));
+        }
+        RingGridDetector::new(config)?;
+        self.state.ringgrid_target = config.clone();
+        self.detector = None;
+        self.state.error = None;
+        self.publish(
+            correlation_id,
+            VisionEvent::RingGridTargetConfigChanged {
+                config: config.clone(),
+            },
+        );
+        Ok(())
     }
 
     fn capture_template(&mut self, correlation_id: Option<CorrelationId>) -> Result<(), ApiError> {
@@ -205,6 +233,7 @@ impl Runtime {
         if self.detector.is_none() {
             self.detector = Some(ActiveDetector::for_algorithm(
                 self.state.selected_algorithm,
+                &self.state.ringgrid_target,
             )?);
         }
         self.state.lifecycle = VisionLifecycle::Processing;
@@ -329,10 +358,14 @@ enum ActiveDetector {
     RadialSymmetry,
     ChessCorners(Box<chess_corners::Detector>),
     CalibrationTarget,
+    RingGrid(Box<RingGridDetector>),
 }
 
 impl ActiveDetector {
-    fn for_algorithm(algorithm: AlgorithmId) -> Result<Self, ApiError> {
+    fn for_algorithm(
+        algorithm: AlgorithmId,
+        ringgrid_target: &RingGridTargetConfig,
+    ) -> Result<Self, ApiError> {
         match algorithm {
             AlgorithmId::TemplateNcc => Err(ApiError::Rejected(
                 "capture a template before starting TemplateNcc".into(),
@@ -344,9 +377,9 @@ impl ActiveDetector {
                 Ok(Self::ChessCorners(Box::new(detector)))
             }
             AlgorithmId::CalibrationTarget => Ok(Self::CalibrationTarget),
-            AlgorithmId::RingGridTarget => Err(ApiError::Rejected(
-                "ringgrid is wired as a published dependency but needs target layout configuration before it can run".into(),
-            )),
+            AlgorithmId::RingGridTarget => Ok(Self::RingGrid(Box::new(RingGridDetector::new(
+                ringgrid_target,
+            )?))),
             AlgorithmId::EdgeModelMatch => Err(ApiError::Rejected(
                 "EdgeModelMatch is deferred until vision-metrology is published".into(),
             )),
@@ -359,8 +392,126 @@ impl ActiveDetector {
             Self::RadialSymmetry => detect_radial_symmetry(frame),
             Self::ChessCorners(detector) => detect_chess_corners(detector.as_mut(), frame),
             Self::CalibrationTarget => detect_calibration_target(frame),
+            Self::RingGrid(detector) => detector.detect(frame),
         }
     }
+}
+
+struct RingGridDetector {
+    detector: ringgrid::Detector,
+    expected_markers: usize,
+}
+
+impl RingGridDetector {
+    fn new(config: &RingGridTargetConfig) -> Result<Self, ApiError> {
+        let target = ringgrid::TargetLayout::coded_hex(
+            config.pitch_mm,
+            usize::from(config.rows),
+            usize::from(config.long_row_cols),
+            config.outer_radius_mm,
+            config.inner_radius_mm,
+            config.ring_width_mm,
+        )
+        .map_err(|error| ApiError::InvalidRequest(format!("invalid RingGrid target: {error}")))?;
+        let expected_markers = target.cells().len();
+        Ok(Self {
+            detector: ringgrid::Detector::new(target),
+            expected_markers,
+        })
+    }
+
+    fn detect(&mut self, frame: &Frame) -> Result<Option<Detection>, String> {
+        let image = frame_to_gray_image(frame)?;
+        let result = self
+            .detector
+            .detect(&image)
+            .map_err(|error| error.to_string())?;
+        if result.center_frame != ringgrid::DetectionFrame::Image {
+            return Err("RingGrid returned marker centers outside the image frame".into());
+        }
+        if result.detected_markers.is_empty() {
+            return Ok(None);
+        }
+        let points: Result<Vec<PointF32>, String> = result
+            .detected_markers
+            .iter()
+            .map(|marker| image_point(marker.center))
+            .collect();
+        let points = points?;
+        let marker_count = points.len();
+        Ok(Some(Detection {
+            frame_id: frame.meta.frame_id,
+            timestamp: frame.meta.timestamp,
+            object_id: "ringgrid-target".into(),
+            confidence: (marker_count as f32 / self.expected_markers as f32).clamp(0.0, 1.0),
+            bbox: bbox_from_points(&points),
+            points,
+            method: AlgorithmId::RingGridTarget,
+            latency_us: 0,
+            diagnostics: Some(format!(
+                "markers={marker_count}/{} centers=image-px",
+                self.expected_markers
+            )),
+        }))
+    }
+}
+
+fn image_point(center: [f64; 2]) -> Result<PointF32, String> {
+    let x = checked_f32(center[0])?;
+    let y = checked_f32(center[1])?;
+    Ok(PointF32 { x, y })
+}
+
+fn checked_f32(value: f64) -> Result<f32, String> {
+    if !value.is_finite() || value < f64::from(f32::MIN) || value > f64::from(f32::MAX) {
+        return Err("RingGrid returned a non-finite or out-of-range image coordinate".into());
+    }
+    Ok(value as f32)
+}
+
+fn frame_to_gray_image(frame: &Frame) -> Result<GrayImage, String> {
+    let width = usize::try_from(frame.meta.width).map_err(|_| "frame width is too large")?;
+    let height = usize::try_from(frame.meta.height).map_err(|_| "frame height is too large")?;
+    let stride = usize::try_from(frame.meta.stride).map_err(|_| "frame stride is too large")?;
+    let row_bytes = match frame.meta.pixel_format {
+        PixelFormat::Gray8 => width,
+        PixelFormat::Rgb8 => width
+            .checked_mul(3)
+            .ok_or_else(|| "RGB frame row is too wide".to_string())?,
+    };
+    if stride < row_bytes {
+        return Err("frame stride is smaller than its pixel row".into());
+    }
+    let required = stride
+        .checked_mul(height)
+        .ok_or_else(|| "frame is too large".to_string())?;
+    if frame.bytes.len() < required {
+        return Err("frame data is shorter than its declared stride".into());
+    }
+
+    let pixels = width
+        .checked_mul(height)
+        .ok_or_else(|| "frame is too large".to_string())?;
+    let mut gray = Vec::with_capacity(pixels);
+    for row_index in 0..height {
+        let row_start = row_index * stride;
+        let row = &frame.bytes[row_start..row_start + row_bytes];
+        match frame.meta.pixel_format {
+            PixelFormat::Gray8 => gray.extend_from_slice(row),
+            PixelFormat::Rgb8 => {
+                for rgb in row.chunks_exact(3) {
+                    let luma = (77 * u16::from(rgb[0])
+                        + 150 * u16::from(rgb[1])
+                        + 29 * u16::from(rgb[2])
+                        + 128)
+                        >> 8;
+                    gray.push(luma as u8);
+                }
+            }
+        }
+    }
+    GrayImage::from_raw(frame.meta.width, frame.meta.height, gray)
+        .ok_or_else(|| "failed to construct grayscale image".into())
 }
 
 fn lifecycle_for_algorithm(algorithm: AlgorithmId) -> VisionLifecycle {
@@ -672,6 +823,99 @@ mod tests {
         assert!((bbox.x - 117.0).abs() <= 1.0);
         assert!((bbox.y - 91.0).abs() <= 1.0);
         assert!(detection.confidence > 0.9);
+    }
+
+    #[test]
+    fn ringgrid_detector_reports_synthetic_marker_centers_in_image_pixels() {
+        let config = RingGridTargetConfig {
+            rows: 3,
+            long_row_cols: 3,
+            pitch_mm: 8.0,
+            outer_radius_mm: 2.4,
+            inner_radius_mm: 1.4,
+            ring_width_mm: 0.5,
+        };
+        let target = ringgrid::TargetLayout::coded_hex(
+            config.pitch_mm,
+            usize::from(config.rows),
+            usize::from(config.long_row_cols),
+            config.outer_radius_mm,
+            config.inner_radius_mm,
+            config.ring_width_mm,
+        )
+        .unwrap();
+        let image = target
+            .render_target_png(&ringgrid::PngTargetOptions {
+                dpi: 180.0,
+                margin_mm: 4.0,
+                include_scale_bar: false,
+            })
+            .unwrap();
+        let frame = Frame {
+            meta: FrameMeta {
+                frame_id: 7,
+                timestamp: now(),
+                width: image.width(),
+                height: image.height(),
+                stride: image.width(),
+                pixel_format: PixelFormat::Gray8,
+            },
+            bytes: Bytes::from(image.into_raw()),
+        };
+        let mut detector = RingGridDetector::new(&config).unwrap();
+        let detection = detector.detect(&frame).unwrap().unwrap();
+
+        assert_eq!(detection.method, AlgorithmId::RingGridTarget);
+        assert!(!detection.points.is_empty());
+        assert!(detection.points.iter().all(|point| {
+            point.x >= 0.0
+                && point.x < frame.meta.width as f32
+                && point.y >= 0.0
+                && point.y < frame.meta.height as f32
+        }));
+        assert!(detection.bbox.is_some());
+        assert!(detection.confidence > 0.0);
+    }
+
+    #[test]
+    fn ringgrid_frame_conversion_removes_stride_padding_and_converts_rgb() {
+        let gray = Frame {
+            meta: FrameMeta {
+                frame_id: 1,
+                timestamp: now(),
+                width: 3,
+                height: 2,
+                stride: 4,
+                pixel_format: PixelFormat::Gray8,
+            },
+            bytes: Bytes::from_static(&[1, 2, 3, 99, 4, 5, 6, 99]),
+        };
+        assert_eq!(
+            frame_to_gray_image(&gray).unwrap().as_raw(),
+            &[1, 2, 3, 4, 5, 6]
+        );
+
+        let rgb = Frame {
+            meta: FrameMeta {
+                frame_id: 2,
+                timestamp: now(),
+                width: 2,
+                height: 1,
+                stride: 7,
+                pixel_format: PixelFormat::Rgb8,
+            },
+            bytes: Bytes::from_static(&[255, 0, 0, 0, 255, 0, 99]),
+        };
+        assert_eq!(frame_to_gray_image(&rgb).unwrap().as_raw(), &[77, 149]);
+    }
+
+    #[test]
+    fn ringgrid_rejects_invalid_target_without_constructing_detector() {
+        let config = RingGridTargetConfig {
+            inner_radius_mm: 4.8,
+            ..RingGridTargetConfig::default()
+        };
+        assert!(RingGridDetector::new(&config).is_err());
     }
 
     fn frame_with_square(frame_id: u64, x0: u32, y0: u32, w: u32, h: u32) -> Frame {

@@ -8,8 +8,9 @@ use system_mirror::{SystemMirror, SystemView};
 use tauri::{Emitter, Manager, State};
 use tokio::sync::RwLock;
 use vision_contracts::{
-    AlgorithmId, CameraApi, CameraCommand, CameraCommandKind, FrameMeta, RecorderApi,
-    RecorderCommand, RecorderCommandKind, RectF32, VisionApi, VisionCommand, VisionCommandKind,
+    AlgorithmId, CameraApi, CameraCommand, CameraCommandKind, Frame, FrameMeta, RecordedFrame,
+    RecordedSession, RecorderApi, RecorderCommand, RecorderCommandKind, RectF32,
+    RingGridTargetConfig, VisionApi, VisionCommand, VisionCommandKind,
 };
 use vision_processing::VisionComponent;
 
@@ -19,6 +20,7 @@ struct AppRuntime {
     recorder: Arc<dyn RecorderApi>,
     mirror: Arc<SystemMirror>,
     latest_frame: Arc<RwLock<Option<FramePayload>>>,
+    latest_replay_frame: Arc<RwLock<Option<FramePayload>>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -35,6 +37,52 @@ async fn system_view(runtime: State<'_, AppRuntime>) -> Result<SystemView, Strin
 #[tauri::command]
 async fn latest_frame(runtime: State<'_, AppRuntime>) -> Result<Option<FramePayload>, String> {
     Ok(runtime.latest_frame.read().await.clone())
+}
+
+#[tauri::command]
+async fn recorded_sessions(runtime: State<'_, AppRuntime>) -> Result<Vec<RecordedSession>, String> {
+    runtime
+        .recorder
+        .list_sessions()
+        .await
+        .map_err(error_message)
+}
+
+#[tauri::command]
+async fn recorded_session_frames(
+    runtime: State<'_, AppRuntime>,
+    session_id: String,
+) -> Result<Vec<RecordedFrame>, String> {
+    runtime
+        .recorder
+        .list_session_frames(&session_id)
+        .await
+        .map_err(error_message)
+}
+
+#[tauri::command]
+async fn select_recorded_frame(
+    app: tauri::AppHandle,
+    runtime: State<'_, AppRuntime>,
+    session_id: String,
+    frame_id: u64,
+) -> Result<(), String> {
+    let frame = runtime
+        .recorder
+        .read_session_frame(&session_id, frame_id)
+        .await
+        .map_err(error_message)?;
+    let payload = frame_payload(frame);
+    *runtime.latest_replay_frame.write().await = Some(payload.clone());
+    app.emit("replay-frame", payload)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn latest_replay_frame(
+    runtime: State<'_, AppRuntime>,
+) -> Result<Option<FramePayload>, String> {
+    Ok(runtime.latest_replay_frame.read().await.clone())
 }
 
 #[tauri::command]
@@ -87,6 +135,18 @@ async fn select_algorithm(
     algorithm: AlgorithmId,
 ) -> Result<CommandReceipt, String> {
     submit_vision(&runtime, VisionCommandKind::SelectAlgorithm { algorithm }).await
+}
+
+#[tauri::command]
+async fn set_ringgrid_target_config(
+    runtime: State<'_, AppRuntime>,
+    config: RingGridTargetConfig,
+) -> Result<CommandReceipt, String> {
+    submit_vision(
+        &runtime,
+        VisionCommandKind::SetRingGridTargetConfig { config },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -193,6 +253,7 @@ pub fn run() {
                     recorder: recorder_api,
                     mirror,
                     latest_frame: Arc::new(RwLock::new(None)),
+                    latest_replay_frame: Arc::new(RwLock::new(None)),
                 })
             })
             .map_err(|error| error.to_string())?;
@@ -209,6 +270,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             system_view,
             latest_frame,
+            recorded_sessions,
+            recorded_session_frames,
+            select_recorded_frame,
+            latest_replay_frame,
             connect_camera,
             refresh_camera_devices,
             select_camera_device,
@@ -217,6 +282,7 @@ pub fn run() {
             stop_camera,
             set_requested_fps,
             select_algorithm,
+            set_ringgrid_target_config,
             set_roi,
             capture_template,
             start_processing,
@@ -250,14 +316,18 @@ fn spawn_frame_emitter(
             let Some(frame) = frames.borrow().clone() else {
                 continue;
             };
-            let payload = FramePayload {
-                meta: frame.meta.clone(),
-                data_base64: general_purpose::STANDARD.encode(&frame.bytes),
-            };
+            let payload = frame_payload((*frame).clone());
             *latest_frame.write().await = Some(payload.clone());
             let _ = app.emit("frame", payload);
         }
     });
+}
+
+fn frame_payload(frame: Frame) -> FramePayload {
+    FramePayload {
+        meta: frame.meta,
+        data_base64: general_purpose::STANDARD.encode(frame.bytes),
+    }
 }
 
 fn default_session_dir() -> PathBuf {

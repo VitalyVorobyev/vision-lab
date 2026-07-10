@@ -5,7 +5,8 @@ use tempfile::{TempDir, tempdir};
 use tokio::time::sleep;
 use vision_contracts::{
     AlgorithmId, CameraApi, CameraCommand, CameraCommandKind, RecorderApi, RecorderCommand,
-    RecorderCommandKind, RectF32, VisionApi, VisionCommand, VisionCommandKind,
+    RecorderCommandKind, RectF32, RingGridTargetConfig, VisionApi, VisionCommand,
+    VisionCommandKind,
 };
 use vision_processing::VisionComponent;
 
@@ -130,6 +131,148 @@ async fn chess_online_flow_produces_overlay_points() {
     })
     .await;
     assert!(detected, "mirror should observe ChESS detection points");
+    stop_all(&stack).await;
+}
+
+#[tokio::test]
+async fn ringgrid_target_config_reaches_mirror_and_recording_manifest() {
+    let stack = TestStack::spawn().await;
+    let config = RingGridTargetConfig {
+        rows: 3,
+        long_row_cols: 3,
+        pitch_mm: 8.0,
+        outer_radius_mm: 2.4,
+        inner_radius_mm: 1.4,
+        ring_width_mm: 0.5,
+    };
+    stack
+        .vision
+        .submit(VisionCommand::new(
+            VisionCommandKind::SetRingGridTargetConfig {
+                config: config.clone(),
+            },
+        ))
+        .await
+        .unwrap();
+
+    let mirrored = wait_until(&stack, |view| view.vision.value.ringgrid_target == config).await;
+    assert!(
+        mirrored,
+        "mirror should expose the configured RingGrid target"
+    );
+
+    stack
+        .recorder
+        .submit(RecorderCommand::new(RecorderCommandKind::StartRecording {
+            max_fps: 20.0,
+        }))
+        .await
+        .unwrap();
+    let session_path = stack
+        .recorder
+        .get_state()
+        .await
+        .unwrap()
+        .value
+        .session_path
+        .expect("recording should have a session path");
+    let manifest = std::fs::read_to_string(format!("{session_path}/manifest.json")).unwrap();
+    assert!(manifest.contains("ringgrid_target"));
+    assert!(manifest.contains("\"rows\": 3"));
+
+    stop_all(&stack).await;
+}
+
+#[tokio::test]
+async fn ringgrid_target_config_is_rejected_without_state_change_while_processing() {
+    let stack = TestStack::spawn().await;
+    stack.start_camera().await;
+    stack
+        .vision
+        .submit(VisionCommand::new(VisionCommandKind::StartProcessing))
+        .await
+        .unwrap();
+
+    let initial = stack.mirror.current().await.vision.value.ringgrid_target;
+    let result = stack
+        .vision
+        .submit(VisionCommand::new(
+            VisionCommandKind::SetRingGridTargetConfig {
+                config: RingGridTargetConfig {
+                    rows: 3,
+                    long_row_cols: 3,
+                    pitch_mm: 8.0,
+                    outer_radius_mm: 2.4,
+                    inner_radius_mm: 1.4,
+                    ring_width_mm: 0.5,
+                },
+            },
+        ))
+        .await;
+    assert!(result.is_err());
+    assert_eq!(
+        stack.mirror.current().await.vision.value.ringgrid_target,
+        initial
+    );
+
+    stop_all(&stack).await;
+}
+
+#[tokio::test]
+async fn recorder_sessions_are_enumerable_and_replay_frames_are_read_only() {
+    let stack = TestStack::spawn().await;
+    stack.start_camera().await;
+    stack
+        .recorder
+        .submit(RecorderCommand::new(RecorderCommandKind::StartRecording {
+            max_fps: 20.0,
+        }))
+        .await
+        .unwrap();
+    let recorded = wait_until(&stack, |view| view.recorder.value.recorded_frames > 0).await;
+    assert!(
+        recorded,
+        "simulated recording should persist at least one frame"
+    );
+
+    let session_path = stack
+        .recorder
+        .get_state()
+        .await
+        .unwrap()
+        .value
+        .session_path
+        .expect("recording should expose its session path");
+    let session_id = std::path::Path::new(&session_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap()
+        .to_string();
+    let sessions = stack.recorder.list_sessions().await.unwrap();
+    assert!(sessions.iter().any(|session| session.id == session_id));
+
+    let frames = stack
+        .recorder
+        .list_session_frames(&session_id)
+        .await
+        .unwrap();
+    let first = frames
+        .first()
+        .expect("recording should list its first frame");
+    let replay = stack
+        .recorder
+        .read_session_frame(&session_id, first.meta.frame_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        replay.meta.pixel_format,
+        vision_contracts::PixelFormat::Gray8
+    );
+    assert_eq!(
+        replay.bytes.len(),
+        (replay.meta.width * replay.meta.height) as usize
+    );
+
     stop_all(&stack).await;
 }
 

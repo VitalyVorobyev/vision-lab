@@ -2,8 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type { FramePayload } from "../domain/camera";
 import type { RectF32 } from "../domain/geometry";
+import type { RecordedFrame, RecordedSession } from "../domain/replay";
 import { emptySystemView, type SystemView } from "../domain/system";
-import type { AlgorithmId } from "../domain/vision";
+import type { AlgorithmId, RingGridTargetConfig } from "../domain/vision";
 import { isTauriHost } from "./host";
 
 export function getSystemView() {
@@ -14,6 +15,26 @@ export function getSystemView() {
 export function getLatestFrame() {
   if (!isTauriHost()) return Promise.resolve<FramePayload | null>(null);
   return invoke<FramePayload | null>("latest_frame");
+}
+
+export function getLatestReplayFrame() {
+  if (!isTauriHost()) return Promise.resolve<FramePayload | null>(null);
+  return invoke<FramePayload | null>("latest_replay_frame");
+}
+
+export function getRecordedSessions() {
+  if (!isTauriHost()) return Promise.resolve<RecordedSession[]>([]);
+  return invoke<RecordedSession[]>("recorded_sessions");
+}
+
+export function getRecordedSessionFrames(sessionId: string) {
+  if (!isTauriHost()) return Promise.resolve<RecordedFrame[]>([]);
+  return invoke<RecordedFrame[]>("recorded_session_frames", { sessionId });
+}
+
+export function selectRecordedFrame(sessionId: string, frameId: number) {
+  if (!isTauriHost()) return Promise.resolve();
+  return invoke("select_recorded_frame", { sessionId, frameId });
 }
 
 export function connectCamera() {
@@ -54,6 +75,11 @@ export function setRequestedFps(fps: number) {
 export function selectAlgorithm(algorithm: AlgorithmId) {
   if (!isTauriHost()) return Promise.resolve(algorithm);
   return invoke("select_algorithm", { algorithm });
+}
+
+export function setRingGridTargetConfig(config: RingGridTargetConfig) {
+  if (!isTauriHost()) return Promise.resolve(config);
+  return invoke("set_ringgrid_target_config", { config });
 }
 
 export function setRoi(roi: RectF32 | null) {
