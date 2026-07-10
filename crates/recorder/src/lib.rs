@@ -7,7 +7,7 @@ use comm_core::{
 use comm_local::{
     CommandClient, CommandInbox, EventBus, MonotonicCounter, StateCell, command_channel,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -15,8 +15,9 @@ use std::{
 };
 use tokio::{fs, sync::watch};
 use vision_contracts::{
-    CameraApi, Frame, RecorderApi, RecorderCommand, RecorderCommandKind, RecorderEvent,
-    RecorderEventStream, RecorderLifecycle, RecorderState, VisionApi, VisionEvent,
+    CameraApi, Frame, FrameMeta, PixelFormat, RecordedFrame, RecordedSession, RecorderApi,
+    RecorderCommand, RecorderCommandKind, RecorderEvent, RecorderEventStream, RecorderLifecycle,
+    RecorderState, VisionApi, VisionEvent,
 };
 
 #[derive(Clone)]
@@ -24,6 +25,7 @@ pub struct RecorderComponent {
     client: CommandClient<RecorderCommand, CommandReceipt>,
     state: Arc<StateCell<Versioned<RecorderState>>>,
     events: Arc<EventBus<RecorderEvent>>,
+    base_dir: PathBuf,
 }
 
 impl RecorderComponent {
@@ -45,6 +47,7 @@ impl RecorderComponent {
             client,
             state: state.clone(),
             events: events.clone(),
+            base_dir: base_dir.clone(),
         });
         tokio::spawn(run_recorder(RecorderRuntimeParts {
             identity,
@@ -73,6 +76,36 @@ impl RecorderApi for RecorderComponent {
 
     async fn subscribe(&self) -> Result<RecorderEventStream, ApiError> {
         Ok(self.events.subscribe())
+    }
+
+    async fn list_sessions(&self) -> Result<Vec<RecordedSession>, ApiError> {
+        list_recorded_sessions(&self.base_dir).await
+    }
+
+    async fn list_session_frames(&self, session_id: &str) -> Result<Vec<RecordedFrame>, ApiError> {
+        let session_dir = resolve_session_dir(&self.base_dir, session_id)?;
+        read_frame_records(&session_dir)
+            .await?
+            .into_iter()
+            .map(FrameRecord::recorded_frame)
+            .collect()
+    }
+
+    async fn read_session_frame(&self, session_id: &str, frame_id: u64) -> Result<Frame, ApiError> {
+        let session_dir = resolve_session_dir(&self.base_dir, session_id)?;
+        let record = read_frame_records(&session_dir)
+            .await?
+            .into_iter()
+            .find(|record| record.frame_id == frame_id)
+            .ok_or_else(|| ApiError::InvalidRequest("recorded frame was not found".into()))?;
+        let frame_path = session_dir
+            .join("frames")
+            .join(format!("frame_{:08}.pgm", record.frame_id));
+        let bytes = read_pgm(&frame_path, record.width, record.height).await?;
+        Ok(Frame {
+            meta: record.meta(),
+            bytes: bytes.into(),
+        })
     }
 }
 
@@ -237,8 +270,16 @@ impl Runtime {
         }
         let record = FrameRecord {
             frame_id: frame.meta.frame_id,
+            timestamp_ms: frame
+                .meta
+                .timestamp
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
             width: frame.meta.width,
             height: frame.meta.height,
+            stride: frame.meta.width,
+            pixel_format: Some(PixelFormat::Gray8),
             path: path.display().to_string(),
         };
         if let Err(error) = append_jsonl(&session.join("frames.jsonl"), &record).await {
@@ -365,12 +406,186 @@ struct Manifest {
     vision_state: Option<Versioned<vision_contracts::VisionState>>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct FrameRecord {
     frame_id: u64,
+    #[serde(default)]
+    timestamp_ms: u64,
     width: u32,
     height: u32,
+    #[serde(default)]
+    stride: u32,
+    #[serde(default)]
+    pixel_format: Option<PixelFormat>,
     path: String,
+}
+
+impl FrameRecord {
+    fn meta(self) -> FrameMeta {
+        FrameMeta {
+            frame_id: self.frame_id,
+            timestamp: UNIX_EPOCH + Duration::from_millis(self.timestamp_ms),
+            width: self.width,
+            height: self.height,
+            stride: self.stride.max(self.width),
+            pixel_format: self.pixel_format.unwrap_or(PixelFormat::Gray8),
+        }
+    }
+
+    fn recorded_frame(self) -> Result<RecordedFrame, ApiError> {
+        Ok(RecordedFrame { meta: self.meta() })
+    }
+}
+
+async fn list_recorded_sessions(base_dir: &Path) -> Result<Vec<RecordedSession>, ApiError> {
+    let mut entries = match fs::read_dir(base_dir).await {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(io_error(error)),
+    };
+    let mut sessions = Vec::new();
+    while let Some(entry) = entries.next_entry().await.map_err(io_error)? {
+        if !entry.file_type().await.map_err(io_error)?.is_dir() {
+            continue;
+        }
+        let id = entry.file_name().to_string_lossy().into_owned();
+        if !is_session_id(&id) {
+            continue;
+        }
+        let session_dir = entry.path();
+        let frame_count = read_frame_records(&session_dir)
+            .await
+            .map(|records| records.len() as u64)
+            .unwrap_or_default();
+        let detection_count = count_jsonl_records(&session_dir.join("detections.jsonl")).await;
+        let created_at_ms = id
+            .strip_prefix("session-")
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or_default();
+        sessions.push(RecordedSession {
+            id,
+            created_at_ms,
+            frame_count,
+            detection_count,
+        });
+    }
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.created_at_ms));
+    Ok(sessions)
+}
+
+fn resolve_session_dir(base_dir: &Path, session_id: &str) -> Result<PathBuf, ApiError> {
+    if !is_session_id(session_id) {
+        return Err(ApiError::InvalidRequest(
+            "invalid recorded session id".into(),
+        ));
+    }
+    Ok(base_dir.join(session_id))
+}
+
+fn is_session_id(value: &str) -> bool {
+    value.strip_prefix("session-").is_some_and(|suffix| {
+        !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+    })
+}
+
+async fn read_frame_records(session_dir: &Path) -> Result<Vec<FrameRecord>, ApiError> {
+    let contents = fs::read_to_string(session_dir.join("frames.jsonl"))
+        .await
+        .map_err(io_error)?;
+    let mut records: Vec<FrameRecord> = contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).map_err(|error| ApiError::Failed(error.to_string())))
+        .collect::<Result<_, _>>()?;
+    records.sort_by_key(|record| record.frame_id);
+    Ok(records)
+}
+
+async fn count_jsonl_records(path: &Path) -> u64 {
+    fs::read_to_string(path)
+        .await
+        .map(|contents| {
+            contents
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .count() as u64
+        })
+        .unwrap_or_default()
+}
+
+async fn read_pgm(
+    path: &Path,
+    expected_width: u32,
+    expected_height: u32,
+) -> Result<Vec<u8>, ApiError> {
+    let data = fs::read(path).await.map_err(io_error)?;
+    let mut offset = 0;
+    let magic = next_pgm_token(&data, &mut offset)
+        .ok_or_else(|| ApiError::Failed("recorded frame has no PGM header".into()))?;
+    if magic != b"P5" {
+        return Err(ApiError::Failed("recorded frame is not binary PGM".into()));
+    }
+    let width = parse_pgm_u32(next_pgm_token(&data, &mut offset), "width")?;
+    let height = parse_pgm_u32(next_pgm_token(&data, &mut offset), "height")?;
+    let max_value = parse_pgm_u32(next_pgm_token(&data, &mut offset), "max value")?;
+    if data
+        .get(offset)
+        .is_none_or(|byte| !byte.is_ascii_whitespace())
+    {
+        return Err(ApiError::Failed(
+            "recorded PGM has no pixel separator".into(),
+        ));
+    }
+    offset += 1;
+    if width != expected_width || height != expected_height || max_value != 255 {
+        return Err(ApiError::Failed(
+            "recorded PGM metadata does not match its frame record".into(),
+        ));
+    }
+    let pixels = usize::try_from(width)
+        .ok()
+        .and_then(|width| {
+            usize::try_from(height)
+                .ok()
+                .and_then(|height| width.checked_mul(height))
+        })
+        .ok_or_else(|| ApiError::Failed("recorded PGM dimensions are too large".into()))?;
+    let bytes = data
+        .get(offset..)
+        .ok_or_else(|| ApiError::Failed("recorded PGM has no pixels".into()))?;
+    if bytes.len() != pixels {
+        return Err(ApiError::Failed(
+            "recorded PGM pixel data has an invalid length".into(),
+        ));
+    }
+    Ok(bytes.to_vec())
+}
+
+fn next_pgm_token<'a>(data: &'a [u8], offset: &mut usize) -> Option<&'a [u8]> {
+    while *offset < data.len() {
+        if data[*offset].is_ascii_whitespace() {
+            *offset += 1;
+        } else if data[*offset] == b'#' {
+            while *offset < data.len() && data[*offset] != b'\n' {
+                *offset += 1;
+            }
+        } else {
+            break;
+        }
+    }
+    let start = *offset;
+    while *offset < data.len() && !data[*offset].is_ascii_whitespace() {
+        *offset += 1;
+    }
+    (start < *offset).then_some(&data[start..*offset])
+}
+
+fn parse_pgm_u32(value: Option<&[u8]>, label: &str) -> Result<u32, ApiError> {
+    let value = value.ok_or_else(|| ApiError::Failed(format!("recorded PGM has no {label}")))?;
+    std::str::from_utf8(value)
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .ok_or_else(|| ApiError::Failed(format!("recorded PGM has an invalid {label}")))
 }
 
 async fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), std::io::Error> {
@@ -390,11 +605,47 @@ async fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), std::i
 async fn write_pgm(path: &Path, frame: &Frame) -> Result<(), std::io::Error> {
     use tokio::io::AsyncWriteExt;
 
+    let bytes = frame_as_gray(frame)?;
     let mut file = fs::File::create(path).await?;
     file.write_all(format!("P5\n{} {}\n255\n", frame.meta.width, frame.meta.height).as_bytes())
         .await?;
-    file.write_all(&frame.bytes).await?;
+    file.write_all(&bytes).await?;
     Ok(())
+}
+
+fn frame_as_gray(frame: &Frame) -> Result<Vec<u8>, std::io::Error> {
+    let width = frame.meta.width as usize;
+    let height = frame.meta.height as usize;
+    let stride = frame.meta.stride as usize;
+    let row_bytes = match frame.meta.pixel_format {
+        PixelFormat::Gray8 => width,
+        PixelFormat::Rgb8 => width * 3,
+    };
+    if stride < row_bytes || frame.bytes.len() < stride.saturating_mul(height) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "frame data does not match its declared layout",
+        ));
+    }
+    let mut gray = Vec::with_capacity(width * height);
+    for row_index in 0..height {
+        let row_start = row_index * stride;
+        let row = &frame.bytes[row_start..row_start + row_bytes];
+        match frame.meta.pixel_format {
+            PixelFormat::Gray8 => gray.extend_from_slice(row),
+            PixelFormat::Rgb8 => {
+                for rgb in row.chunks_exact(3) {
+                    let luma = (77 * u16::from(rgb[0])
+                        + 150 * u16::from(rgb[1])
+                        + 29 * u16::from(rgb[2])
+                        + 128)
+                        >> 8;
+                    gray.push(luma as u8);
+                }
+            }
+        }
+    }
+    Ok(gray)
 }
 
 fn unix_millis() -> u128 {

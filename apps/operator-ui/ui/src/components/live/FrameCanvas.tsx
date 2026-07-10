@@ -16,7 +16,7 @@ export function FrameCanvas({
   frame,
 }: {
   canvasRef: RefObject<HTMLCanvasElement | null>;
-  handlers: CanvasHandlers;
+  handlers?: CanvasHandlers;
   frame: FramePayload | null;
 }) {
   const style: CSSProperties = frame

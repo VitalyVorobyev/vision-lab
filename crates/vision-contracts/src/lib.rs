@@ -379,6 +379,22 @@ pub struct RecorderState {
     pub error: Option<String>,
 }
 
+/// Summary of a persisted recording session owned by the recorder.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordedSession {
+    /// Stable directory name relative to the recorder's configured session root.
+    pub id: String,
+    pub created_at_ms: u64,
+    pub frame_count: u64,
+    pub detection_count: u64,
+}
+
+/// Metadata for a single frame available from a persisted recording session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordedFrame {
+    pub meta: FrameMeta,
+}
+
 impl Default for RecorderState {
     fn default() -> Self {
         Self {
@@ -447,4 +463,7 @@ pub trait RecorderApi: Send + Sync {
     async fn submit(&self, command: RecorderCommand) -> Result<CommandReceipt, ApiError>;
     async fn get_state(&self) -> Result<Versioned<RecorderState>, ApiError>;
     async fn subscribe(&self) -> Result<RecorderEventStream, ApiError>;
+    async fn list_sessions(&self) -> Result<Vec<RecordedSession>, ApiError>;
+    async fn list_session_frames(&self, session_id: &str) -> Result<Vec<RecordedFrame>, ApiError>;
+    async fn read_session_frame(&self, session_id: &str, frame_id: u64) -> Result<Frame, ApiError>;
 }

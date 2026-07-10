@@ -218,6 +218,64 @@ async fn ringgrid_target_config_is_rejected_without_state_change_while_processin
     stop_all(&stack).await;
 }
 
+#[tokio::test]
+async fn recorder_sessions_are_enumerable_and_replay_frames_are_read_only() {
+    let stack = TestStack::spawn().await;
+    stack.start_camera().await;
+    stack
+        .recorder
+        .submit(RecorderCommand::new(RecorderCommandKind::StartRecording {
+            max_fps: 20.0,
+        }))
+        .await
+        .unwrap();
+    let recorded = wait_until(&stack, |view| view.recorder.value.recorded_frames > 0).await;
+    assert!(
+        recorded,
+        "simulated recording should persist at least one frame"
+    );
+
+    let session_path = stack
+        .recorder
+        .get_state()
+        .await
+        .unwrap()
+        .value
+        .session_path
+        .expect("recording should expose its session path");
+    let session_id = std::path::Path::new(&session_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap()
+        .to_string();
+    let sessions = stack.recorder.list_sessions().await.unwrap();
+    assert!(sessions.iter().any(|session| session.id == session_id));
+
+    let frames = stack
+        .recorder
+        .list_session_frames(&session_id)
+        .await
+        .unwrap();
+    let first = frames
+        .first()
+        .expect("recording should list its first frame");
+    let replay = stack
+        .recorder
+        .read_session_frame(&session_id, first.meta.frame_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        replay.meta.pixel_format,
+        vision_contracts::PixelFormat::Gray8
+    );
+    assert_eq!(
+        replay.bytes.len(),
+        (replay.meta.width * replay.meta.height) as usize
+    );
+
+    stop_all(&stack).await;
+}
+
 async fn start_processing_and_recording(stack: &TestStack) {
     stack
         .vision

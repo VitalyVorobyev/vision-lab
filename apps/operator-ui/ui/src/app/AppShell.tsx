@@ -6,6 +6,7 @@ import { CameraControls } from "../components/controls/CameraControls";
 import { RecorderControls } from "../components/controls/RecorderControls";
 import { RingGridConfigPanel } from "../components/controls/RingGridConfigPanel";
 import { VisionControls } from "../components/controls/VisionControls";
+import { FrameCanvas } from "../components/live/FrameCanvas";
 import { LiveViewport } from "../components/live/LiveViewport";
 import { ComponentHealth } from "../components/status/ComponentHealth";
 import { EventTimeline } from "../components/timeline/EventTimeline";
@@ -15,19 +16,23 @@ import { Panel } from "../components/ui/Panel";
 import type { FramePayload } from "../domain/camera";
 import type { RectF32 } from "../domain/geometry";
 import type { OverlayKey, OverlayVisibility } from "../domain/overlays";
+import { sessionLabel } from "../domain/replay";
 import type { SystemView } from "../domain/system";
+import type { ReplayState } from "../hooks/useReplay";
 import { orderedRecentEvents } from "../domain/system";
 import type { AlgorithmId, RingGridTargetConfig } from "../domain/vision";
 import { algorithmLabel, runnableAlgorithms } from "../domain/vision";
 
 type CanvasHandlers = Parameters<typeof LiveViewport>[0]["canvasHandlers"];
-type OperatorTab = "canvas" | "algorithm" | "camera" | "health";
+type OperatorTab = "canvas" | "algorithm" | "camera" | "replay" | "health";
 
 export type AppShellProps = {
   view: SystemView | null;
   frame: FramePayload | null;
   canvasRef: RefObject<HTMLCanvasElement | null>;
   canvasHandlers: CanvasHandlers;
+  replayCanvasRef: RefObject<HTMLCanvasElement | null>;
+  replay: ReplayState;
   pendingRoi: RectF32 | null;
   overlays: OverlayVisibility;
   error: string | null;
@@ -57,6 +62,8 @@ export function AppShell({
   frame,
   canvasRef,
   canvasHandlers,
+  replayCanvasRef,
+  replay,
   pendingRoi,
   overlays,
   error,
@@ -184,6 +191,9 @@ export function AppShell({
             onStopCamera={onStopCamera}
             pending={pending}
           />
+        ) : null}
+        {activeTab === "replay" ? (
+          <ReplayWorkspace canvasRef={replayCanvasRef} replay={replay} />
         ) : null}
         {activeTab === "health" ? (
           <HealthWorkspace
@@ -424,6 +434,92 @@ function HealthWorkspace({ camera, vision, recorder, events, resyncCount }: Heal
   );
 }
 
+function ReplayWorkspace({
+  canvasRef,
+  replay,
+}: {
+  canvasRef: RefObject<HTMLCanvasElement | null>;
+  replay: ReplayState;
+}) {
+  return (
+    <div className="grid h-full min-h-0 lg:grid-cols-[300px_minmax(0,1fr)]">
+      <aside className="min-h-0 overflow-y-auto border-b border-border bg-surface-muted p-3 lg:border-b-0 lg:border-r">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div>
+            <p className="text-xs font-medium uppercase text-muted">Recordings</p>
+            <h2 className="text-sm font-semibold text-text">Session replay</h2>
+          </div>
+          <Button busy={replay.loading} onClick={() => void replay.refresh()} variant="ghost">
+            Refresh
+          </Button>
+        </div>
+        <div className="grid gap-1">
+          {replay.sessions.map((session) => {
+            const active = replay.selectedSessionId === session.id;
+            return (
+              <button
+                aria-pressed={active}
+                className={toolListClass(active)}
+                key={session.id}
+                onClick={() => void replay.selectSession(session.id)}
+                type="button"
+              >
+                <span className="min-w-0 flex-1 text-left">
+                  <span className="block truncate font-mono text-xs text-text">{session.id}</span>
+                  <span className="mt-1 block text-xs text-muted">
+                    {sessionLabel(session)} · {session.frame_count} frames · {session.detection_count} detections
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+          {replay.sessions.length === 0 ? (
+            <p className="px-2 py-4 text-sm text-muted">No recorded sessions found.</p>
+          ) : null}
+        </div>
+      </aside>
+      <section className="flex min-h-0 min-w-0 flex-col bg-surface">
+        <header className="flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+          <div>
+            <h2 className="text-sm font-semibold text-text">Replay frame</h2>
+            <p className="mt-1 text-xs text-muted">
+              Read-only recorded output; it does not replace the live camera stream.
+            </p>
+          </div>
+          <label className="grid gap-1 text-xs text-muted">
+            Frame
+            <select
+              className="min-h-9 min-w-44 rounded-md border border-border bg-canvas px-3 font-mono text-sm text-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+              disabled={!replay.selectedSessionId || replay.frames.length === 0}
+              onChange={(event) => {
+                if (replay.selectedSessionId) {
+                  void replay.selectFrame(replay.selectedSessionId, Number(event.currentTarget.value));
+                }
+              }}
+              value={String(replay.frame?.meta.frame_id ?? "")}
+            >
+              {replay.frames.length === 0 ? <option value="">No frame</option> : null}
+              {replay.frames.map((record) => (
+                <option key={record.meta.frame_id} value={record.meta.frame_id}>
+                  #{record.meta.frame_id} · {record.meta.width}x{record.meta.height}
+                </option>
+              ))}
+            </select>
+          </label>
+        </header>
+        {replay.error ? (
+          <p className="border-b border-danger/60 bg-danger/15 px-4 py-2 text-sm text-danger-text">
+            {replay.error}
+          </p>
+        ) : null}
+        <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-canvas p-3">
+          <FrameCanvas canvasRef={canvasRef} frame={replay.frame} />
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function ToolRail({
   selectedAlgorithm,
   onSelectAlgorithm,
@@ -528,6 +624,7 @@ const tabs: { id: OperatorTab; label: string }[] = [
   { id: "canvas", label: "Canvas" },
   { id: "algorithm", label: "Algorithm" },
   { id: "camera", label: "Camera" },
+  { id: "replay", label: "Replay" },
   { id: "health", label: "Logs & health" },
 ];
 
