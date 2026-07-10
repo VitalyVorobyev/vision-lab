@@ -9,7 +9,8 @@ use tauri::{Emitter, Manager, State};
 use tokio::sync::RwLock;
 use vision_contracts::{
     AlgorithmId, CameraApi, CameraCommand, CameraCommandKind, FrameMeta, RecorderApi,
-    RecorderCommand, RecorderCommandKind, RectF32, VisionApi, VisionCommand, VisionCommandKind,
+    RecorderCommand, RecorderCommandKind, RectF32, RingGridTargetConfig, VisionApi, VisionCommand,
+    VisionCommandKind,
 };
 use vision_processing::VisionComponent;
 
@@ -87,6 +88,18 @@ async fn select_algorithm(
     algorithm: AlgorithmId,
 ) -> Result<CommandReceipt, String> {
     submit_vision(&runtime, VisionCommandKind::SelectAlgorithm { algorithm }).await
+}
+
+#[tauri::command]
+async fn set_ringgrid_target_config(
+    runtime: State<'_, AppRuntime>,
+    config: RingGridTargetConfig,
+) -> Result<CommandReceipt, String> {
+    submit_vision(
+        &runtime,
+        VisionCommandKind::SetRingGridTargetConfig { config },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -217,6 +230,7 @@ pub fn run() {
             stop_camera,
             set_requested_fps,
             select_algorithm,
+            set_ringgrid_target_config,
             set_roi,
             capture_template,
             start_processing,

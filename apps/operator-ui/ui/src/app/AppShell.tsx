@@ -1,9 +1,10 @@
 import { useState, type ReactNode, type RefObject } from "react";
-import { CircleDot, Radio, ScanLine, ScanSearch } from "lucide-react";
+import { CircleDot, Grid3X3, Radio, ScanLine, ScanSearch } from "lucide-react";
 
 import { CameraConfigPanel } from "../components/controls/CameraConfigPanel";
 import { CameraControls } from "../components/controls/CameraControls";
 import { RecorderControls } from "../components/controls/RecorderControls";
+import { RingGridConfigPanel } from "../components/controls/RingGridConfigPanel";
 import { VisionControls } from "../components/controls/VisionControls";
 import { LiveViewport } from "../components/live/LiveViewport";
 import { ComponentHealth } from "../components/status/ComponentHealth";
@@ -16,7 +17,7 @@ import type { RectF32 } from "../domain/geometry";
 import type { OverlayKey, OverlayVisibility } from "../domain/overlays";
 import type { SystemView } from "../domain/system";
 import { orderedRecentEvents } from "../domain/system";
-import type { AlgorithmId } from "../domain/vision";
+import type { AlgorithmId, RingGridTargetConfig } from "../domain/vision";
 import { algorithmLabel, runnableAlgorithms } from "../domain/vision";
 
 type CanvasHandlers = Parameters<typeof LiveViewport>[0]["canvasHandlers"];
@@ -41,6 +42,7 @@ export type AppShellProps = {
   onStopCamera: () => void;
   onSetRequestedFps: (fps: number) => void;
   onSelectAlgorithm: (algorithm: AlgorithmId) => void;
+  onSetRingGridTargetConfig: (config: RingGridTargetConfig) => void;
   onToggleOverlay: (key: OverlayKey) => void;
   onClearRoi: () => void;
   onCaptureTemplate: () => void;
@@ -69,6 +71,7 @@ export function AppShell({
   onStopCamera,
   onSetRequestedFps,
   onSelectAlgorithm,
+  onSetRingGridTargetConfig,
   onToggleOverlay,
   onClearRoi,
   onCaptureTemplate,
@@ -137,6 +140,7 @@ export function AppShell({
             onCaptureTemplate={onCaptureTemplate}
             onClearRoi={onClearRoi}
             onConnectCamera={onConnectCamera}
+            onOpenAlgorithmConfig={() => setActiveTab("algorithm")}
             onRunChess={onRunChess}
             onSelectAlgorithm={onSelectAlgorithm}
             onSetRequestedFps={onSetRequestedFps}
@@ -160,6 +164,7 @@ export function AppShell({
             onClearRoi={onClearRoi}
             onRunChess={onRunChess}
             onSelectAlgorithm={onSelectAlgorithm}
+            onSetRingGridTargetConfig={onSetRingGridTargetConfig}
             onStartProcessing={onStartProcessing}
             onStopProcessing={onStopProcessing}
             pending={pending}
@@ -206,6 +211,7 @@ function CanvasWorkspace({
   pending,
   onToggleOverlay,
   onSelectAlgorithm,
+  onOpenAlgorithmConfig,
   onRunChess,
   onConnectCamera,
   onStartCamera,
@@ -239,6 +245,7 @@ function CanvasWorkspace({
           onClearRoi={onClearRoi}
           onRunChess={onRunChess}
           onSelectAlgorithm={onSelectAlgorithm}
+          onOpenAlgorithmConfig={onOpenAlgorithmConfig}
           onStartProcessing={onStartProcessing}
           onStopProcessing={onStopProcessing}
           pending={pending}
@@ -269,6 +276,7 @@ function AlgorithmWorkspace({
   pendingRoi,
   pending,
   onSelectAlgorithm,
+  onSetRingGridTargetConfig,
   onClearRoi,
   onCaptureTemplate,
   onRunChess,
@@ -295,34 +303,44 @@ function AlgorithmWorkspace({
             pendingRoi={pendingRoi}
             vision={vision}
           />
-          <Panel eyebrow="State" title={algorithmLabel(selectedAlgorithm)}>
-            <MetricGrid
-              items={[
-                { label: "Lifecycle", value: vision?.lifecycle ?? "Offline" },
-                {
-                  label: "Input",
-                  value: `${(vision?.input_fps ?? 0).toFixed(1)} fps`,
-                },
-                {
-                  label: "Processing",
-                  value: `${(vision?.processing_fps ?? 0).toFixed(1)} fps`,
-                },
-                {
-                  label: "Latency",
-                  value: `${(vision?.mean_latency_ms ?? 0).toFixed(2)} ms`,
-                },
-                {
-                  label: "Dropped",
-                  tone: (vision?.dropped_input_frames ?? 0) > 0 ? "warn" : "neutral",
-                  value: String(vision?.dropped_input_frames ?? 0),
-                },
-                {
-                  label: "Points",
-                  value: String(vision?.last_detection?.points.length ?? 0),
-                },
-              ]}
-            />
-          </Panel>
+          <div className="grid content-start gap-3">
+            {selectedAlgorithm === "RingGridTarget" ? (
+              <RingGridConfigPanel
+                key={JSON.stringify(vision?.ringgrid_target)}
+                onApply={onSetRingGridTargetConfig}
+                pending={pending}
+                vision={vision}
+              />
+            ) : null}
+            <Panel eyebrow="State" title={algorithmLabel(selectedAlgorithm)}>
+              <MetricGrid
+                items={[
+                  { label: "Lifecycle", value: vision?.lifecycle ?? "Offline" },
+                  {
+                    label: "Input",
+                    value: `${(vision?.input_fps ?? 0).toFixed(1)} fps`,
+                  },
+                  {
+                    label: "Processing",
+                    value: `${(vision?.processing_fps ?? 0).toFixed(1)} fps`,
+                  },
+                  {
+                    label: "Latency",
+                    value: `${(vision?.mean_latency_ms ?? 0).toFixed(2)} ms`,
+                  },
+                  {
+                    label: "Dropped",
+                    tone: (vision?.dropped_input_frames ?? 0) > 0 ? "warn" : "neutral",
+                    value: String(vision?.dropped_input_frames ?? 0),
+                  },
+                  {
+                    label: "Points",
+                    value: String(vision?.last_detection?.points.length ?? 0),
+                  },
+                ]}
+              />
+            </Panel>
+          </div>
         </div>
       </div>
     </div>
@@ -542,6 +560,13 @@ const toolItems: {
     shortLabel: "Calib",
   },
   {
+    algorithm: "RingGridTarget",
+    family: "Calibration",
+    icon: <Grid3X3 />,
+    label: "RingGrid target",
+    shortLabel: "RingGrid",
+  },
+  {
     algorithm: "TemplateNcc",
     family: "Pattern matching",
     icon: <Radio />,
@@ -575,6 +600,7 @@ type CanvasWorkspaceProps = Pick<
   camera: SystemView["camera"]["value"] | undefined;
   vision: SystemView["vision"]["value"] | undefined;
   recorder: SystemView["recorder"]["value"] | undefined;
+  onOpenAlgorithmConfig: () => void;
 };
 
 type AlgorithmWorkspaceProps = Pick<
@@ -582,6 +608,7 @@ type AlgorithmWorkspaceProps = Pick<
   | "pendingRoi"
   | "pending"
   | "onSelectAlgorithm"
+  | "onSetRingGridTargetConfig"
   | "onClearRoi"
   | "onCaptureTemplate"
   | "onRunChess"

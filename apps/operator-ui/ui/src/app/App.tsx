@@ -6,7 +6,7 @@ import {
   type OverlayKey,
   type OverlayVisibility,
 } from "../domain/overlays";
-import type { AlgorithmId } from "../domain/vision";
+import type { AlgorithmId, RingGridTargetConfig } from "../domain/vision";
 import { useCommandStatus } from "../hooks/useCommandStatus";
 import { useFrameCanvas } from "../hooks/useFrameCanvas";
 import { useLatestFrame } from "../hooks/useLatestFrame";
@@ -20,6 +20,7 @@ import {
   selectCameraDevice,
   selectCameraFormat,
   setRequestedFps,
+  setRingGridTargetConfig,
   setRoi,
   startCamera,
   startProcessing,
@@ -88,6 +89,9 @@ export function App() {
       }
       onSelectAlgorithm={(algorithm: AlgorithmId) =>
         void commands.execute("select-algorithm", () => selectAlgorithm(algorithm))
+      }
+      onSetRingGridTargetConfig={(config: RingGridTargetConfig) =>
+        void commands.execute("set-ringgrid-target-config", () => setRingGridTargetConfig(config))
       }
       onSelectCameraDevice={(deviceId: string) =>
         void commands.execute("select-camera-device", () => selectCameraDevice(deviceId))

@@ -74,6 +74,34 @@ pub enum AlgorithmId {
     CalibrationTarget,
 }
 
+/// Physical layout for the v1 coded-hex RingGrid calibration target.
+///
+/// All lengths are measured in millimeters. Marker centers and all detection
+/// output remain in image-pixel coordinates; this configuration is only the
+/// board-side description supplied to the detector.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RingGridTargetConfig {
+    pub rows: u16,
+    pub long_row_cols: u16,
+    pub pitch_mm: f32,
+    pub outer_radius_mm: f32,
+    pub inner_radius_mm: f32,
+    pub ring_width_mm: f32,
+}
+
+impl Default for RingGridTargetConfig {
+    fn default() -> Self {
+        Self {
+            rows: 15,
+            long_row_cols: 14,
+            pitch_mm: 8.0,
+            outer_radius_mm: 4.8,
+            inner_radius_mm: 3.2,
+            ring_width_mm: 1.152,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Detection {
     pub frame_id: u64,
@@ -248,6 +276,7 @@ pub enum VisionLifecycle {
 pub struct VisionState {
     pub lifecycle: VisionLifecycle,
     pub selected_algorithm: AlgorithmId,
+    pub ringgrid_target: RingGridTargetConfig,
     pub roi: Option<RectF32>,
     pub has_template: bool,
     pub input_fps: f32,
@@ -263,6 +292,7 @@ impl Default for VisionState {
         Self {
             lifecycle: VisionLifecycle::Idle,
             selected_algorithm: AlgorithmId::ChessCorners,
+            ringgrid_target: RingGridTargetConfig::default(),
             roi: None,
             has_template: false,
             input_fps: 0.0,
@@ -297,6 +327,9 @@ pub enum VisionCommandKind {
     SelectAlgorithm {
         algorithm: AlgorithmId,
     },
+    SetRingGridTargetConfig {
+        config: RingGridTargetConfig,
+    },
     SetRoi {
         roi: Option<RectF32>,
     },
@@ -319,6 +352,7 @@ pub enum VisionFault {
 pub enum VisionEvent {
     LifecycleChanged { lifecycle: VisionLifecycle },
     AlgorithmSelected { algorithm: AlgorithmId },
+    RingGridTargetConfigChanged { config: RingGridTargetConfig },
     RoiChanged { roi: Option<RectF32> },
     TemplateCaptured { width: u32, height: u32 },
     DetectionProduced { detection: Detection },

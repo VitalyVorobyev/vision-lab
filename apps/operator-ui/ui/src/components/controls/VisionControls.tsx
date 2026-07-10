@@ -14,6 +14,7 @@ export function VisionControls({
   pendingRoi,
   pending,
   onSelectAlgorithm,
+  onOpenAlgorithmConfig,
   onClearRoi,
   onCaptureTemplate,
   onRunChess,
@@ -24,6 +25,7 @@ export function VisionControls({
   pendingRoi: RectF32 | null;
   pending: (key: string) => boolean;
   onSelectAlgorithm: (algorithm: AlgorithmId) => void;
+  onOpenAlgorithmConfig?: () => void;
   onClearRoi: () => void;
   onCaptureTemplate: () => void;
   onRunChess: () => void;
@@ -33,6 +35,7 @@ export function VisionControls({
   const hasRoi = pendingRoi !== null || vision?.roi != null;
   const selectedAlgorithm = vision?.selected_algorithm ?? "ChessCorners";
   const isTemplate = selectedAlgorithm === "TemplateNcc";
+  const isRingGrid = selectedAlgorithm === "RingGridTarget";
   const detectorMetric = isTemplate
     ? ({
         label: "Template",
@@ -68,6 +71,19 @@ export function VisionControls({
             </option>
           ))}
         </Select>
+        {isRingGrid ? (
+          <div className="border border-border bg-surface-muted px-3 py-2 text-xs">
+            <p className="text-muted">Coded hex target</p>
+            <p className="mt-1 font-mono text-text">
+              {vision?.ringgrid_target.rows ?? 15} rows · {vision?.ringgrid_target.long_row_cols ?? 14} columns · {vision?.ringgrid_target.pitch_mm ?? 8} mm
+            </p>
+            {onOpenAlgorithmConfig ? (
+              <Button className="mt-2 w-full" onClick={onOpenAlgorithmConfig} variant="ghost">
+                Open full configuration
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
         <Toolbar>
           <Button busy={pending("clear-roi")} icon={<ScanLine />} onClick={onClearRoi}>
             Clear ROI

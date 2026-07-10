@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { FramePayload } from "../domain/camera";
 import type { RectF32 } from "../domain/geometry";
 import { emptySystemView, type SystemView } from "../domain/system";
-import type { AlgorithmId } from "../domain/vision";
+import type { AlgorithmId, RingGridTargetConfig } from "../domain/vision";
 import { isTauriHost } from "./host";
 
 export function getSystemView() {
@@ -54,6 +54,11 @@ export function setRequestedFps(fps: number) {
 export function selectAlgorithm(algorithm: AlgorithmId) {
   if (!isTauriHost()) return Promise.resolve(algorithm);
   return invoke("select_algorithm", { algorithm });
+}
+
+export function setRingGridTargetConfig(config: RingGridTargetConfig) {
+  if (!isTauriHost()) return Promise.resolve(config);
+  return invoke("set_ringgrid_target_config", { config });
 }
 
 export function setRoi(roi: RectF32 | null) {
